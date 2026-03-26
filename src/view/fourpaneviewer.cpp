@@ -151,7 +151,7 @@ bool FourPaneViewer::loadDicomSeries(const QString &dicomPath, QString *errorMes
         connector->SetInput(reader->GetOutput());
         connector->Update();
 
-        m_imageData->DeepCopy(connector->GetOutput());
+        m_imageData = connector->GetOutput();
         m_axialPanel->setImageData(m_imageData);
         m_coronalPanel->setImageData(m_imageData);
         m_sagittalPanel->setImageData(m_imageData);
@@ -238,3 +238,4 @@ void FourPaneViewer::updateSummary(const StudyPackage &package)
     }
     m_summaryLabel->setText(summaryLines.join(QLatin1Char('\n')));
 }
+

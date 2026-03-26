@@ -20,7 +20,6 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
     : QWidget(parent)
     , m_statusLabel(new QLabel(QStringLiteral("等待加载模型"), this))
     , m_vtkWidget(new QVTKOpenGLNativeWidget(this))
-    , m_renderWindow(vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New())
     , m_renderer(vtkSmartPointer<vtkRenderer>::New())
 {
     auto *layout = new QVBoxLayout(this);
@@ -29,19 +28,21 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
 
     m_statusLabel->setStyleSheet(QStringLiteral("color: #6b7280;"));
 
-    m_vtkWidget->setRenderWindow(m_renderWindow);
-    m_renderWindow->AddRenderer(m_renderer);
+    auto renderWindow = vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
+    m_vtkWidget->setRenderWindow(renderWindow);
+    renderWindow->AddRenderer(m_renderer);
     m_renderer->SetBackground(0.95, 0.95, 0.97);
 
     layout->addWidget(m_vtkWidget, 1);
     layout->addWidget(m_statusLabel);
 }
 
+
 void ModelViewWidget::clearScene(const QString &message)
 {
     m_renderer->RemoveAllViewProps();
     m_statusLabel->setText(message);
-    m_renderWindow->Render();
+    m_vtkWidget->renderWindow()->Render();
 }
 
 void ModelViewWidget::addModelFile(const QString &filePath)
@@ -77,5 +78,8 @@ void ModelViewWidget::addModelFile(const QString &filePath)
     m_renderer->AddActor(actor);
     m_renderer->ResetCamera();
     m_statusLabel->setText(QStringLiteral("已加载模型: %1").arg(info.fileName()));
-    m_renderWindow->Render();
+    m_vtkWidget->renderWindow()->Render();
 }
+
+
+

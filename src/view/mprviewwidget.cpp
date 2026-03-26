@@ -124,7 +124,6 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     , m_sliceLabel(new QLabel(QStringLiteral("未加载"), this))
     , m_slider(new QSlider(Qt::Horizontal, this))
     , m_vtkWidget(new QVTKOpenGLNativeWidget(this))
-    , m_renderWindow(vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New())
     , m_renderer(vtkSmartPointer<vtkRenderer>::New())
     , m_reslice(vtkSmartPointer<vtkImageReslice>::New())
     , m_windowLevel(vtkSmartPointer<vtkImageMapToWindowLevelColors>::New())
@@ -139,8 +138,9 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     m_sliceLabel->setStyleSheet(QStringLiteral("color: #6b7280;"));
     m_slider->setEnabled(false);
 
-    m_vtkWidget->setRenderWindow(m_renderWindow);
-    m_renderWindow->AddRenderer(m_renderer);
+    auto renderWindow = vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
+    m_vtkWidget->setRenderWindow(renderWindow);
+    renderWindow->AddRenderer(m_renderer);
     m_vtkWidget->interactor()->SetInteractorStyle(vtkSmartPointer<vtkInteractorStyleImage>::New());
 
     m_renderer->SetBackground(0.05, 0.05, 0.06);
@@ -161,6 +161,7 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     connect(m_slider, &QSlider::valueChanged, this, &MprViewWidget::onSliceChanged);
 }
 
+
 void MprViewWidget::setImageData(vtkImageData *imageData)
 {
     if (imageData == nullptr) {
@@ -168,7 +169,7 @@ void MprViewWidget::setImageData(vtkImageData *imageData)
         return;
     }
 
-    m_imageData->DeepCopy(imageData);
+    m_imageData = imageData;
     m_hasImage = true;
     m_sliceGeometry = buildSliceGeometry(m_imageData);
 
@@ -348,3 +349,7 @@ void MprViewWidget::updateSliceDisplay(int value)
                               .arg(m_slider->maximum() + 1));
     m_vtkWidget->renderWindow()->Render();
 }
+
+
+
+

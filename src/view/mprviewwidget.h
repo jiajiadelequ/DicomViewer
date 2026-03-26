@@ -57,7 +57,6 @@ private:
     QLabel *m_sliceLabel;
     QSlider *m_slider;
     QVTKOpenGLNativeWidget *m_vtkWidget;
-    vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer> m_renderer;
     vtkSmartPointer<vtkImageReslice> m_reslice;
     vtkSmartPointer<vtkImageMapToWindowLevelColors> m_windowLevel;
@@ -66,3 +65,7 @@ private:
     SliceGeometry m_sliceGeometry;
     bool m_hasImage = false;
 };
+
+
+
+

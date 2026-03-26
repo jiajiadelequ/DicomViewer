@@ -22,6 +22,9 @@ public:
 private:
     QLabel *m_statusLabel;
     QVTKOpenGLNativeWidget *m_vtkWidget;
-    vtkSmartPointer<vtkGenericOpenGLRenderWindow> m_renderWindow;
     vtkSmartPointer<vtkRenderer> m_renderer;
 };
+
+
+
+
