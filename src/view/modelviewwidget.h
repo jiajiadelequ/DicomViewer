@@ -6,7 +6,7 @@
 
 class QLabel;
 class QVTKOpenGLNativeWidget;
-class vtkGenericOpenGLRenderWindow;
+class vtkPolyData;
 class vtkRenderer;
 
 class ModelViewWidget final : public QWidget
@@ -17,14 +17,10 @@ public:
     explicit ModelViewWidget(QWidget *parent = nullptr);
 
     void clearScene(const QString &message);
-    void addModelFile(const QString &filePath);
+    void addModelData(const QString &filePath, vtkPolyData *polyData);
 
 private:
     QLabel *m_statusLabel;
     QVTKOpenGLNativeWidget *m_vtkWidget;
     vtkSmartPointer<vtkRenderer> m_renderer;
 };
-
-
-
-

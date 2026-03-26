@@ -1,6 +1,6 @@
 #pragma once
 
-#include "src/model/studypackage.h"
+#include "src/model/studyloadresult.h"
 
 #include <QWidget>
 #include <vtkSmartPointer.h>
@@ -20,13 +20,12 @@ class FourPaneViewer final : public QWidget
 public:
     explicit FourPaneViewer(QWidget *parent = nullptr);
 
-    bool loadStudyPackage(const StudyPackage &package, QString *errorMessage = nullptr);
+    bool applyStudyLoadResult(const StudyLoadResult &result, QString *errorMessage = nullptr);
     void showEmptyState();
     void showLoadingState(const QString &message);
     void showErrorState(const QString &message);
 
 private:
-    bool loadDicomSeries(const QString &dicomPath, QString *errorMessage = nullptr);
     void ensureContentPage();
     void updateSummary(const StudyPackage &package);
 

@@ -13,8 +13,8 @@ if(MSVC)
     add_compile_options("/source-charset:utf-8")
 endif()
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Widgets Network)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Widgets Network)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Widgets Network Concurrent)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Widgets Network Concurrent)
 
 set(MEDPRO_VCPKG_TOOLCHAIN "E:/QtProjects/vckpg/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE FILEPATH "Path to the vcpkg toolchain file")
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "${MEDPRO_VCPKG_TOOLCHAIN}")
@@ -102,8 +102,11 @@ set(PROJECT_SOURCES
     mainwindow.cpp
     mainwindow.h
     src/model/studypackage.h
+    src/model/studyloadresult.h
     src/core/casepackagereader.h
     src/core/casepackagereader.cpp
+    src/core/studyloader.h
+    src/core/studyloader.cpp
     src/view/viewportpanel.h
     src/view/viewportpanel.cpp
     src/view/mprviewwidget.h
@@ -132,6 +135,7 @@ target_link_libraries(DicomViewerSkeleton PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Widgets
     Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Concurrent
     VTK::GUISupportQt
     ${VTK_LIBRARIES}
     ${ITK_LIBRARIES}
@@ -274,3 +278,5 @@ add_custom_command(TARGET dicom_to_stl POST_BUILD
     ${ITK_DLLS}
     $<TARGET_FILE_DIR:dicom_to_stl>
 )
+
+

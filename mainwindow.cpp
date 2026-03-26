@@ -1,6 +1,6 @@
 #include "mainwindow.h"
 
-#include "src/core/casepackagereader.h"
+#include "src/core/studyloader.h"
 #include "src/view/fourpaneviewer.h"
 
 #include <QAction>
@@ -8,6 +8,7 @@
 #include <QDialog>
 #include <QEventLoop>
 #include <QFileDialog>
+#include <QFutureWatcher>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
@@ -18,6 +19,8 @@
 #include <QStringList>
 #include <QVBoxLayout>
 
+#include <QtConcurrent/QtConcurrentRun>
+
 #include <gdcmVersion.h>
 #include <itkVersion.h>
 #include <vtkVersion.h>
@@ -27,7 +30,6 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , m_viewer(new FourPaneViewer(this))
     , m_statusLabel(new QLabel(this))
-    , m_packageReader(new CasePackageReader())
 {
     setCentralWidget(m_viewer);
     createMenus();
@@ -39,11 +41,6 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle(QStringLiteral("Dicom Viewer Workstation"));
 }
 
-MainWindow::~MainWindow()
-{
-    delete m_packageReader;
-}
-
 void MainWindow::openStudyPackage()
 {
     const QString rootPath = QFileDialog::getExistingDirectory(
@@ -53,40 +50,56 @@ void MainWindow::openStudyPackage()
         return;
     }
 
-    StudyPackage package;
-    QString errorMessage;
-    m_viewer->showLoadingState(QStringLiteral("正在准备病例目录..."));
+    m_viewer->showLoadingState(QStringLiteral("正在后台扫描目录并读取 DICOM/模型..."));
 
-    const bool ok = runWithLoadingDialog(
-        QStringLiteral("正在加载病例包"),
-        [&](QLabel *messageLabel, QProgressBar *progressBar) {
-            messageLabel->setText(QStringLiteral("正在扫描病例目录..."));
-            progressBar->setRange(0, 0);
-            qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("正在加载病例包"));
+    dialog.setModal(true);
+    dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
+    dialog.setMinimumWidth(420);
 
-            package = m_packageReader->readFromDirectory(rootPath, &errorMessage);
-            if (!package.isValid()) {
-                return false;
-            }
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(20, 18, 20, 18);
+    layout->setSpacing(12);
 
-            messageLabel->setText(QStringLiteral("正在通过 ITK + GDCM 读取 DICOM 序列..."));
-            m_viewer->showLoadingState(QStringLiteral("正在通过 ITK + GDCM 读取 DICOM 序列..."));
-            qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
+    auto *titleLabel = new QLabel(QStringLiteral("正在后台处理，请稍候..."), &dialog);
+    titleLabel->setStyleSheet(QStringLiteral("font-size: 12pt; font-weight: 700;"));
 
-            if (!m_viewer->loadStudyPackage(package, &errorMessage)) {
-                return false;
-            }
+    auto *messageLabel = new QLabel(QStringLiteral("正在扫描病例目录并读取影像、模型数据..."), &dialog);
+    messageLabel->setWordWrap(true);
 
-            messageLabel->setText(QStringLiteral("正在完成界面刷新..."));
-            qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
-            updateStatusBar(package);
-            return true;
-        });
+    auto *progressBar = new QProgressBar(&dialog);
+    progressBar->setTextVisible(false);
+    progressBar->setRange(0, 0);
 
-    if (!ok) {
+    layout->addWidget(titleLabel);
+    layout->addWidget(messageLabel);
+    layout->addWidget(progressBar);
+
+    QFutureWatcher<StudyLoadResult> watcher;
+    QEventLoop loop;
+    connect(&watcher, &QFutureWatcher<StudyLoadResult>::finished, &loop, &QEventLoop::quit);
+
+    dialog.show();
+    qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
+
+    watcher.setFuture(QtConcurrent::run([rootPath]() {
+        return StudyLoader::loadFromDirectory(rootPath);
+    }));
+
+    loop.exec();
+    dialog.accept();
+    qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
+
+    const StudyLoadResult result = watcher.result();
+    QString errorMessage = result.errorMessage;
+    if (!result.succeeded() || !m_viewer->applyStudyLoadResult(result, &errorMessage)) {
         m_viewer->showErrorState(errorMessage);
         showPackageError(errorMessage);
+        return;
     }
+
+    updateStatusBar(result.package);
 }
 
 void MainWindow::createMenus()
@@ -127,40 +140,4 @@ void MainWindow::showPackageError(const QString &message)
         this,
         QStringLiteral("无法加载病例包"),
         message.isEmpty() ? QStringLiteral("病例包目录缺少可识别的数据。") : message);
-}
-
-bool MainWindow::runWithLoadingDialog(const QString &title, const std::function<bool(QLabel *, QProgressBar *)> &task)
-{
-    QDialog dialog(this);
-    dialog.setWindowTitle(title);
-    dialog.setModal(true);
-    dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
-    dialog.setMinimumWidth(420);
-
-    auto *layout = new QVBoxLayout(&dialog);
-    layout->setContentsMargins(20, 18, 20, 18);
-    layout->setSpacing(12);
-
-    auto *titleLabel = new QLabel(QStringLiteral("正在处理，请稍候..."), &dialog);
-    titleLabel->setStyleSheet(QStringLiteral("font-size: 12pt; font-weight: 700;"));
-
-    auto *messageLabel = new QLabel(QStringLiteral("准备开始..."), &dialog);
-    messageLabel->setWordWrap(true);
-
-    auto *progressBar = new QProgressBar(&dialog);
-    progressBar->setTextVisible(false);
-    progressBar->setRange(0, 0);
-
-    layout->addWidget(titleLabel);
-    layout->addWidget(messageLabel);
-    layout->addWidget(progressBar);
-
-    dialog.show();
-    qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
-
-    const bool ok = task(messageLabel, progressBar);
-
-    dialog.accept();
-    qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
-    return ok;
 }

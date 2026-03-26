@@ -7,14 +7,12 @@
 #include <QVTKOpenGLNativeWidget.h>
 
 #include <vtkActor.h>
-#include <vtkAlgorithmOutput.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <vtkNew.h>
-#include <vtkOBJReader.h>
+#include <vtkPolyData.h>
 #include <vtkPolyDataMapper.h>
 #include <vtkProperty.h>
 #include <vtkRenderer.h>
-#include <vtkSTLReader.h>
 
 ModelViewWidget::ModelViewWidget(QWidget *parent)
     : QWidget(parent)
@@ -37,7 +35,6 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
     layout->addWidget(m_statusLabel);
 }
 
-
 void ModelViewWidget::clearScene(const QString &message)
 {
     m_renderer->RemoveAllViewProps();
@@ -45,31 +42,16 @@ void ModelViewWidget::clearScene(const QString &message)
     m_vtkWidget->renderWindow()->Render();
 }
 
-void ModelViewWidget::addModelFile(const QString &filePath)
+void ModelViewWidget::addModelData(const QString &filePath, vtkPolyData *polyData)
 {
-    const QFileInfo info(filePath);
-    const QString suffix = info.suffix().toLower();
-
-    vtkAlgorithmOutput *outputPort = nullptr;
-    vtkSmartPointer<vtkSTLReader> stlReader;
-    vtkSmartPointer<vtkOBJReader> objReader;
-
-    if (suffix == QStringLiteral("stl")) {
-        stlReader = vtkSmartPointer<vtkSTLReader>::New();
-        stlReader->SetFileName(filePath.toStdString().c_str());
-        stlReader->Update();
-        outputPort = stlReader->GetOutputPort();
-    } else if (suffix == QStringLiteral("obj")) {
-        objReader = vtkSmartPointer<vtkOBJReader>::New();
-        objReader->SetFileName(filePath.toStdString().c_str());
-        objReader->Update();
-        outputPort = objReader->GetOutputPort();
-    } else {
+    if (polyData == nullptr || (polyData->GetNumberOfPoints() <= 0 && polyData->GetNumberOfCells() <= 0)) {
         return;
     }
 
+    const QFileInfo info(filePath);
+
     vtkNew<vtkPolyDataMapper> mapper;
-    mapper->SetInputConnection(outputPort);
+    mapper->SetInputData(polyData);
 
     vtkNew<vtkActor> actor;
     actor->SetMapper(mapper);
@@ -80,6 +62,3 @@ void ModelViewWidget::addModelFile(const QString &filePath)
     m_statusLabel->setText(QStringLiteral("已加载模型: %1").arg(info.fileName()));
     m_vtkWidget->renderWindow()->Render();
 }
-
-
-
