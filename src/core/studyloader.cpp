@@ -4,6 +4,7 @@
 
 #include <QDebug>
 #include <QFileInfo>
+#include <gdcmException.h>
 #include <QStringList>
 
 #include <vtkImageData.h>
@@ -123,6 +124,8 @@ QString readMetaDataTag(VolumeImageIOType *imageIO, const std::string &fileName,
         imageIO->ReadImageInformation();
     } catch (const itk::ExceptionObject &) {
         return QStringLiteral("<error>");
+    } catch (const gdcm::Exception &) {
+        return QStringLiteral("<error>");
     }
 
     std::string value;
@@ -144,6 +147,8 @@ WindowLevelPresetData readWindowLevelPreset(VolumeImageIOType *imageIO, const st
         imageIO->SetFileName(fileName);
         imageIO->ReadImageInformation();
     } catch (const itk::ExceptionObject &) {
+        return preset;
+    } catch (const gdcm::Exception &) {
         return preset;
     }
 
@@ -310,7 +315,8 @@ void loadDicomData(const QString &dicomPath, StudyLoadResult *result)
         return;
     }
 
-    auto namesGenerator = VolumeNamesGeneratorType::New();
+    try {
+        auto namesGenerator = VolumeNamesGeneratorType::New();
     namesGenerator->SetUseSeriesDetails(true);
     namesGenerator->SetDirectory(dicomPath.toStdString());
 
@@ -364,6 +370,13 @@ void loadDicomData(const QString &dicomPath, StudyLoadResult *result)
                               result->imageData,
                               fileNames,
                               result->windowLevelPreset);
+    } catch (const itk::ExceptionObject &ex) {
+        result->errorMessage = QStringLiteral("ITK/GDCM 读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
+    } catch (const gdcm::Exception &ex) {
+        result->errorMessage = QStringLiteral("GDCM 读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
+    } catch (const std::exception &ex) {
+        result->errorMessage = QStringLiteral("读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
+    }
 }
 
 void loadModelData(const QStringList &modelFiles, StudyLoadResult *result)
@@ -414,11 +427,14 @@ StudyLoadResult StudyLoader::loadFromDirectory(const QString &rootPath)
         }
     } catch (const itk::ExceptionObject &ex) {
         result.errorMessage = QStringLiteral("ITK/GDCM 读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
+    } catch (const gdcm::Exception &ex) {
+        result.errorMessage = QStringLiteral("GDCM 读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
     } catch (const std::exception &ex) {
         result.errorMessage = QStringLiteral("读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
     }
 
     return result;
 }
+
 
 

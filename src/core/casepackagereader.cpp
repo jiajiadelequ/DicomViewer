@@ -5,6 +5,8 @@
 #include <QFileInfo>
 #include <QStringList>
 
+#include <gdcmException.h>
+#include <itkGDCMImageIO.h>
 #include <itkGDCMSeriesFileNames.h>
 
 #include <limits>
@@ -12,6 +14,7 @@
 
 namespace
 {
+using DicomImageIOType = itk::GDCMImageIO;
 using DicomNamesGeneratorType = itk::GDCMSeriesFileNames;
 
 struct DicomDirectoryMatch
@@ -51,6 +54,110 @@ QStringList collectFiles(const QString &directoryPath, const QStringList &filter
     }
     results.sort(Qt::CaseInsensitive);
     return results;
+}
+
+bool isLikelyDicomByName(const QFileInfo &fileInfo)
+{
+    const QString suffix = fileInfo.suffix().toLower();
+    return suffix.isEmpty()
+        || suffix == QStringLiteral("dcm")
+        || suffix == QStringLiteral("dicom")
+        || suffix == QStringLiteral("ima");
+}
+
+bool isKnownNonDicomFile(const QFileInfo &fileInfo)
+{
+    static const QStringList suffixes {
+        QStringLiteral("json"),
+        QStringLiteral("obj"),
+        QStringLiteral("stl"),
+        QStringLiteral("ply"),
+        QStringLiteral("vtp"),
+        QStringLiteral("vtk"),
+        QStringLiteral("txt"),
+        QStringLiteral("csv"),
+        QStringLiteral("xml"),
+        QStringLiteral("jpg"),
+        QStringLiteral("jpeg"),
+        QStringLiteral("png"),
+        QStringLiteral("bmp"),
+        QStringLiteral("gif"),
+        QStringLiteral("log"),
+        QStringLiteral("ini"),
+        QStringLiteral("zip"),
+        QStringLiteral("7z"),
+        QStringLiteral("rar")
+    };
+    const QString suffix = fileInfo.suffix().toLower();
+    return !suffix.isEmpty() && suffixes.contains(suffix);
+}
+
+bool canReadAsDicom(DicomImageIOType *imageIO, const QFileInfo &fileInfo)
+{
+    if (imageIO == nullptr || !fileInfo.exists() || !fileInfo.isFile()) {
+        return false;
+    }
+
+    try {
+        const std::string nativeFilePath = QDir::toNativeSeparators(fileInfo.absoluteFilePath()).toStdString();
+        return imageIO->CanReadFile(nativeFilePath.c_str());
+    } catch (const itk::ExceptionObject &) {
+        return false;
+    } catch (const gdcm::Exception &) {
+        return false;
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
+bool directoryLooksLikeDicom(const QString &directoryPath)
+{
+    const QDir directory(directoryPath);
+    const QFileInfoList files = directory.entryInfoList(QDir::Files | QDir::Readable | QDir::NoSymLinks,
+                                                        QDir::Name | QDir::IgnoreCase);
+    if (files.isEmpty()) {
+        return false;
+    }
+
+    auto imageIO = DicomImageIOType::New();
+
+    int likelyProbeCount = 0;
+    for (const QFileInfo &fileInfo : files) {
+        if (!isLikelyDicomByName(fileInfo)) {
+            continue;
+        }
+
+        ++likelyProbeCount;
+        if (canReadAsDicom(imageIO, fileInfo)) {
+            return true;
+        }
+
+        if (likelyProbeCount >= 8) {
+            return false;
+        }
+    }
+
+    if (likelyProbeCount > 0) {
+        return false;
+    }
+
+    int fallbackProbeCount = 0;
+    for (const QFileInfo &fileInfo : files) {
+        if (isKnownNonDicomFile(fileInfo)) {
+            continue;
+        }
+
+        ++fallbackProbeCount;
+        if (canReadAsDicom(imageIO, fileInfo)) {
+            return true;
+        }
+
+        if (fallbackProbeCount >= 4) {
+            break;
+        }
+    }
+
+    return false;
 }
 
 bool hasPreferredDicomDirectoryName(const QString &directoryPath)
@@ -112,6 +219,8 @@ QStringList largestSeriesFilesInDirectory(const QString &directoryPath)
         return largestSeriesFiles;
     } catch (const itk::ExceptionObject &) {
         return {};
+    } catch (const gdcm::Exception &) {
+        return {};
     } catch (const std::exception &) {
         return {};
     }
@@ -143,6 +252,10 @@ DicomDirectoryMatch resolveDicomDirectory(const QDir &rootDir)
     DicomDirectoryMatch bestMatch;
 
     for (const QString &directoryPath : candidateDirectories(rootDir)) {
+        if (!directoryLooksLikeDicom(directoryPath)) {
+            continue;
+        }
+
         const QStringList seriesFiles = largestSeriesFilesInDirectory(directoryPath);
         if (seriesFiles.isEmpty()) {
             continue;
