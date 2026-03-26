@@ -7,12 +7,8 @@
 class QLabel;
 class QSlider;
 class QVTKOpenGLNativeWidget;
-class vtkGenericOpenGLRenderWindow;
-class vtkImageActor;
 class vtkImageData;
-class vtkImageMapToWindowLevelColors;
-class vtkImageReslice;
-class vtkRenderer;
+class vtkImageViewer2;
 
 class MprViewWidget final : public QWidget
 {
@@ -35,21 +31,9 @@ private slots:
     void onSliceChanged(int value);
 
 private:
-    struct SliceGeometry
-    {
-        double xAxis[3] { 1.0, 0.0, 0.0 };
-        double yAxis[3] { 0.0, 1.0, 0.0 };
-        double normal[3] { 0.0, 0.0, 1.0 };
-        double centerX = 0.0;
-        double centerY = 0.0;
-        double minPosition = 0.0;
-        double maxPosition = 0.0;
-        double step = 1.0;
-    };
-
+    void configureViewerOrientation();
     void updateSliceControls();
-    void updateSliceDisplay(int value);
-    SliceGeometry buildSliceGeometry(vtkImageData *imageData) const;
+    void updateSliceLabel(int slice, int sliceMin, int sliceMax);
     void updateWindowLevel(vtkImageData *imageData);
 
     Orientation m_orientation;
@@ -57,15 +41,7 @@ private:
     QLabel *m_sliceLabel;
     QSlider *m_slider;
     QVTKOpenGLNativeWidget *m_vtkWidget;
-    vtkSmartPointer<vtkRenderer> m_renderer;
-    vtkSmartPointer<vtkImageReslice> m_reslice;
-    vtkSmartPointer<vtkImageMapToWindowLevelColors> m_windowLevel;
-    vtkSmartPointer<vtkImageActor> m_imageActor;
+    vtkSmartPointer<vtkImageViewer2> m_viewer;
     vtkSmartPointer<vtkImageData> m_imageData;
-    SliceGeometry m_sliceGeometry;
     bool m_hasImage = false;
 };
-
-
-
-

@@ -10,7 +10,7 @@
 #include <QStackedLayout>
 #include <QVBoxLayout>
 
-#include <vtkImageData.h>
+#include <vtkPointData.h>
 
 #include <itkGDCMImageIO.h>
 #include <itkGDCMSeriesFileNames.h>
@@ -151,7 +151,38 @@ bool FourPaneViewer::loadDicomSeries(const QString &dicomPath, QString *errorMes
         connector->SetInput(reader->GetOutput());
         connector->Update();
 
-        m_imageData = connector->GetOutput();
+        auto *connectorOutput = connector->GetOutput();
+        if (connectorOutput == nullptr) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("VTK 转换失败，未生成影像数据: %1").arg(dicomPath);
+            }
+            return false;
+        }
+
+        int extent[6] { 0, -1, 0, -1, 0, -1 };
+        connectorOutput->GetExtent(extent);
+        if (extent[0] > extent[1] || extent[2] > extent[3] || extent[4] > extent[5]) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("DICOM 序列维度无效，无法显示: %1").arg(dicomPath);
+            }
+            return false;
+        }
+
+        auto *scalars = connectorOutput->GetPointData() != nullptr
+            ? connectorOutput->GetPointData()->GetScalars()
+            : nullptr;
+        if (scalars == nullptr) {
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("DICOM 序列没有可显示的像素标量数据: %1").arg(dicomPath);
+            }
+            return false;
+        }
+
+        auto persistentImageData = vtkSmartPointer<vtkImageData>::New();
+        persistentImageData->DeepCopy(connectorOutput);
+        persistentImageData->Modified();
+
+        m_imageData = persistentImageData;
         m_axialPanel->setImageData(m_imageData);
         m_coronalPanel->setImageData(m_imageData);
         m_sagittalPanel->setImageData(m_imageData);
