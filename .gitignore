@@ -91,3 +91,5 @@ CMakeLists.txt.user*
 /.vs/VSWorkspaceState.json
 /.vs/slnx.sqlite
 /.vs/tasks.vs.json
+/release
+

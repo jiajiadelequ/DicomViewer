@@ -30,6 +30,15 @@
         }
       ],
       "console": "integratedTerminal"
+    },
+    {
+      "name": "Publish And Run Release",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\release\\DicomViewerSkeleton.exe",
+      "cwd": "${workspaceFolder}\\release",
+      "preLaunchTask": "publish-release",
+      "console": "integratedTerminal"
     }
   ]
 }
