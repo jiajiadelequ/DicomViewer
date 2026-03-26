@@ -3,6 +3,7 @@
 #include "modelviewwidget.h"
 #include "mprviewwidget.h"
 
+#include <QDebug>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -11,12 +12,16 @@
 #include <QVBoxLayout>
 
 #include <vtkPointData.h>
+#include <vtkMatrix3x3.h>
 
 #include <itkGDCMImageIO.h>
 #include <itkGDCMSeriesFileNames.h>
 #include <itkImage.h>
 #include <itkImageSeriesReader.h>
 #include <itkImageToVTKImageFilter.h>
+#include <itkMetaDataObject.h>
+
+#include <vector>
 
 namespace
 {
@@ -27,6 +32,147 @@ using VolumeReaderType = itk::ImageSeriesReader<VolumeImageType>;
 using VolumeNamesGeneratorType = itk::GDCMSeriesFileNames;
 using VolumeImageIOType = itk::GDCMImageIO;
 using VolumeConnectorType = itk::ImageToVTKImageFilter<VolumeImageType>;
+
+QString formatItkDirection(const VolumeImageType::DirectionType &direction)
+{
+    return QStringLiteral("[[%1, %2, %3], [%4, %5, %6], [%7, %8, %9]]")
+        .arg(direction(0, 0), 0, 'f', 6)
+        .arg(direction(0, 1), 0, 'f', 6)
+        .arg(direction(0, 2), 0, 'f', 6)
+        .arg(direction(1, 0), 0, 'f', 6)
+        .arg(direction(1, 1), 0, 'f', 6)
+        .arg(direction(1, 2), 0, 'f', 6)
+        .arg(direction(2, 0), 0, 'f', 6)
+        .arg(direction(2, 1), 0, 'f', 6)
+        .arg(direction(2, 2), 0, 'f', 6);
+}
+
+QString formatVtkDirection(vtkImageData *imageData)
+{
+    auto *directionMatrix = imageData != nullptr ? imageData->GetDirectionMatrix() : nullptr;
+    if (directionMatrix == nullptr) {
+        return QStringLiteral("<null>");
+    }
+
+    return QStringLiteral("[[%1, %2, %3], [%4, %5, %6], [%7, %8, %9]]")
+        .arg(directionMatrix->GetElement(0, 0), 0, 'f', 6)
+        .arg(directionMatrix->GetElement(0, 1), 0, 'f', 6)
+        .arg(directionMatrix->GetElement(0, 2), 0, 'f', 6)
+        .arg(directionMatrix->GetElement(1, 0), 0, 'f', 6)
+        .arg(directionMatrix->GetElement(1, 1), 0, 'f', 6)
+        .arg(directionMatrix->GetElement(1, 2), 0, 'f', 6)
+        .arg(directionMatrix->GetElement(2, 0), 0, 'f', 6)
+        .arg(directionMatrix->GetElement(2, 1), 0, 'f', 6)
+        .arg(directionMatrix->GetElement(2, 2), 0, 'f', 6);
+}
+
+void applyItkDirectionToVtkImage(VolumeImageType *itkImage, vtkImageData *vtkImage)
+{
+    if (itkImage == nullptr || vtkImage == nullptr) {
+        return;
+    }
+
+    auto directionMatrix = vtkSmartPointer<vtkMatrix3x3>::New();
+    const auto &itkDirection = itkImage->GetDirection();
+    for (unsigned int row = 0; row < VolumeDimension; ++row) {
+        for (unsigned int column = 0; column < VolumeDimension; ++column) {
+            directionMatrix->SetElement(static_cast<int>(row),
+                                        static_cast<int>(column),
+                                        itkDirection(row, column));
+        }
+    }
+
+    vtkImage->SetDirectionMatrix(directionMatrix);
+}
+
+QString readMetaDataTag(VolumeImageIOType *imageIO, const std::string &fileName, const char *tag)
+{
+    if (imageIO == nullptr || fileName.empty()) {
+        return QStringLiteral("<n/a>");
+    }
+
+    try {
+        imageIO->SetFileName(fileName);
+        imageIO->ReadImageInformation();
+    } catch (const itk::ExceptionObject &) {
+        return QStringLiteral("<error>");
+    }
+
+    std::string value;
+    if (itk::ExposeMetaData<std::string>(imageIO->GetMetaDataDictionary(), tag, value)) {
+        return QString::fromStdString(value);
+    }
+
+    return QStringLiteral("<missing>");
+}
+
+void logOrientationDiagnostics(const QString &dicomPath,
+                               VolumeImageType *itkImage,
+                               vtkImageData *vtkImage,
+                               const std::vector<std::string> &fileNames)
+{
+    if (itkImage == nullptr || vtkImage == nullptr) {
+        return;
+    }
+
+    const auto itkDirection = itkImage->GetDirection();
+    const auto itkOrigin = itkImage->GetOrigin();
+    const auto itkSpacing = itkImage->GetSpacing();
+    const auto itkSize = itkImage->GetLargestPossibleRegion().GetSize();
+
+    double vtkOrigin[3] { 0.0, 0.0, 0.0 };
+    double vtkSpacing[3] { 0.0, 0.0, 0.0 };
+    int vtkExtent[6] { 0, -1, 0, -1, 0, -1 };
+    vtkImage->GetOrigin(vtkOrigin);
+    vtkImage->GetSpacing(vtkSpacing);
+    vtkImage->GetExtent(vtkExtent);
+
+    qInfo().noquote() << QStringLiteral("[DICOM] path=%1").arg(dicomPath);
+    qInfo().noquote()
+        << QStringLiteral("[DICOM] file-count=%1 first=%2 last=%3")
+               .arg(static_cast<qlonglong>(fileNames.size()))
+               .arg(fileNames.empty() ? QStringLiteral("<none>") : QString::fromStdString(fileNames.front()))
+               .arg(fileNames.empty() ? QStringLiteral("<none>") : QString::fromStdString(fileNames.back()));
+    qInfo().noquote()
+        << QStringLiteral("[DICOM] itk-size=[%1, %2, %3] itk-spacing=[%4, %5, %6] itk-origin=[%7, %8, %9]")
+               .arg(static_cast<qlonglong>(itkSize[0]))
+               .arg(static_cast<qlonglong>(itkSize[1]))
+               .arg(static_cast<qlonglong>(itkSize[2]))
+               .arg(itkSpacing[0], 0, 'f', 6)
+               .arg(itkSpacing[1], 0, 'f', 6)
+               .arg(itkSpacing[2], 0, 'f', 6)
+               .arg(itkOrigin[0], 0, 'f', 6)
+               .arg(itkOrigin[1], 0, 'f', 6)
+               .arg(itkOrigin[2], 0, 'f', 6);
+    qInfo().noquote() << QStringLiteral("[DICOM] itk-direction=%1").arg(formatItkDirection(itkDirection));
+    qInfo().noquote()
+        << QStringLiteral("[DICOM] vtk-extent=[%1, %2, %3, %4, %5, %6] vtk-spacing=[%7, %8, %9] vtk-origin=[%10, %11, %12]")
+               .arg(vtkExtent[0])
+               .arg(vtkExtent[1])
+               .arg(vtkExtent[2])
+               .arg(vtkExtent[3])
+               .arg(vtkExtent[4])
+               .arg(vtkExtent[5])
+               .arg(vtkSpacing[0], 0, 'f', 6)
+               .arg(vtkSpacing[1], 0, 'f', 6)
+               .arg(vtkSpacing[2], 0, 'f', 6)
+               .arg(vtkOrigin[0], 0, 'f', 6)
+               .arg(vtkOrigin[1], 0, 'f', 6)
+               .arg(vtkOrigin[2], 0, 'f', 6);
+    qInfo().noquote() << QStringLiteral("[DICOM] vtk-direction=%1").arg(formatVtkDirection(vtkImage));
+
+    auto metaImageIO = VolumeImageIOType::New();
+    qInfo().noquote()
+        << QStringLiteral("[DICOM] first-instance=%1 first-position=%2 first-orientation=%3")
+               .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.front(), "0020|0013"))
+               .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.front(), "0020|0032"))
+               .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.front(), "0020|0037"));
+    qInfo().noquote()
+        << QStringLiteral("[DICOM] last-instance=%1 last-position=%2 last-orientation=%3")
+               .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.back(), "0020|0013"))
+               .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.back(), "0020|0032"))
+               .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.back(), "0020|0037"));
+}
 }
 
 FourPaneViewer::FourPaneViewer(QWidget *parent)
@@ -180,9 +326,11 @@ bool FourPaneViewer::loadDicomSeries(const QString &dicomPath, QString *errorMes
 
         auto persistentImageData = vtkSmartPointer<vtkImageData>::New();
         persistentImageData->DeepCopy(connectorOutput);
+        applyItkDirectionToVtkImage(reader->GetOutput(), persistentImageData);
         persistentImageData->Modified();
 
         m_imageData = persistentImageData;
+        logOrientationDiagnostics(dicomPath, reader->GetOutput(), m_imageData, fileNames);
         m_axialPanel->setImageData(m_imageData);
         m_coronalPanel->setImageData(m_imageData);
         m_sagittalPanel->setImageData(m_imageData);
