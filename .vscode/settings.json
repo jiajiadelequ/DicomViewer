@@ -1,0 +1,18 @@
+{
+  "cmake.configureOnOpen": false,
+  "cmake.useCMakePresets": "never",
+  "cmake.generator": "Ninja",
+  "cmake.cmakePath": "F:/VS/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe",
+  "cmake.buildDirectory": "${workspaceFolder}/build/${buildType}",
+  "cmake.configureSettings": {
+    "CMAKE_PREFIX_PATH": "D:/Qt5/5.15.2/msvc2019_64",
+    "Qt5_DIR": "D:/Qt5/5.15.2/msvc2019_64/lib/cmake/Qt5",
+    "CMAKE_MAKE_PROGRAM": "F:/VS/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe"
+  },
+  "cmake.environment": {
+    "PATH": "D:/Qt5/5.15.2/msvc2019_64/bin;${env:PATH}"
+  },
+  "files.associations": {
+    "*.tpp": "cpp"
+  }
+}

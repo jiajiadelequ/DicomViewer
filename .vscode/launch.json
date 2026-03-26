@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug DicomViewerSkeleton",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\build\\debug\\DicomViewerSkeleton.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "build-debug",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "D:\\Qt5\\5.15.2\\msvc2019_64\\bin;${workspaceFolder}\\third_party\\VTK9.4\\bin;${workspaceFolder}\\third_party\\GDCM-3.0.26-install\\Debug\\bin;${workspaceFolder}\\third_party\\ITK545i\\Debug\\bin;${env:PATH}"
+        }
+      ],
+      "console": "integratedTerminal"
+    }
+  ]
+}

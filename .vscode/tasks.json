@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-debug",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.vscode\\build-debug-msvc.cmd",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$msCompile"
+      ]
+    },
+    {
+      "label": "build-release",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.vscode\\build-release-msvc.cmd",
+      "problemMatcher": [
+        "$msCompile"
+      ]
+    }
+  ]
+}
