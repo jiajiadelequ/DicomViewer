@@ -6,10 +6,11 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QPushButton>
 #include <QSplitter>
 #include <QStackedLayout>
-#include <QVBoxLayout>
 #include <QTimer>
+#include <QVBoxLayout>
 
 #include <vtkImageData.h>
 #include <vtkPolyData.h>
@@ -18,8 +19,8 @@ FourPaneViewer::FourPaneViewer(QWidget *parent)
     : QWidget(parent)
     , m_rootLayout(new QStackedLayout(this))
     , m_statePage(new QWidget(this))
-    , m_stateTitleLabel(new QLabel(this))
-    , m_stateMessageLabel(new QLabel(this))
+    , m_stateTitleLabel(new QLabel(m_statePage))
+    , m_stateMessageLabel(new QLabel(m_statePage))
     , m_contentPage(nullptr)
     , m_axialPanel(nullptr)
     , m_coronalPanel(nullptr)
@@ -27,6 +28,7 @@ FourPaneViewer::FourPaneViewer(QWidget *parent)
     , m_volumePanel(nullptr)
     , m_objectList(nullptr)
     , m_summaryLabel(nullptr)
+    , m_crosshairToggleButton(nullptr)
     , m_imageData(vtkSmartPointer<vtkImageData>::New())
 {
     auto *stateLayout = new QVBoxLayout(m_statePage);
@@ -63,6 +65,8 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
     ensureContentPage();
 
     if (result.imageData != nullptr) {
+        m_hasDicomImage = true;
+        setCrosshairEnabled(false);
         m_imageData = result.imageData;
         if (result.windowLevelPreset.isValid) {
             m_axialPanel->setRecommendedWindowLevel(result.windowLevelPreset.window, result.windowLevelPreset.level);
@@ -78,6 +82,8 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
         m_coronalPanel->setImageData(m_imageData);
         m_sagittalPanel->setImageData(m_imageData);
     } else {
+        m_hasDicomImage = false;
+        setCrosshairEnabled(false);
         const QString dicomText = QStringLiteral("未发现 DICOM 序列");
         m_axialPanel->clearRecommendedWindowLevel();
         m_coronalPanel->clearRecommendedWindowLevel();
@@ -143,8 +149,19 @@ void FourPaneViewer::ensureContentPage()
     m_coronalPanel = new MprViewWidget(QStringLiteral("Coronal MPR"), MprViewWidget::Orientation::Coronal, m_contentPage);
     m_sagittalPanel = new MprViewWidget(QStringLiteral("Sagittal MPR"), MprViewWidget::Orientation::Sagittal, m_contentPage);
     m_volumePanel = new ModelViewWidget(m_contentPage);
-    m_objectList = new QListWidget(m_contentPage);
-    m_summaryLabel = new QLabel(QStringLiteral("尚未加载病例包"), m_contentPage);
+
+    auto *rightPanel = new QWidget(m_contentPage);
+    m_objectList = new QListWidget(rightPanel);
+    m_summaryLabel = new QLabel(QStringLiteral("尚未加载病例包"), rightPanel);
+    m_crosshairToggleButton = new QPushButton(QStringLiteral("十字线定位: 关"), rightPanel);
+    m_crosshairToggleButton->setCheckable(true);
+    m_crosshairToggleButton->setChecked(false);
+    m_crosshairToggleButton->setEnabled(false);
+
+    connect(m_axialPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncMprCursor);
+    connect(m_coronalPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncMprCursor);
+    connect(m_sagittalPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncMprCursor);
+    connect(m_crosshairToggleButton, &QPushButton::toggled, this, &FourPaneViewer::handleCrosshairToggle);
 
     auto *gridHorizontalTop = new QSplitter(Qt::Horizontal, m_contentPage);
     gridHorizontalTop->addWidget(m_axialPanel);
@@ -165,14 +182,14 @@ void FourPaneViewer::ensureContentPage()
 
     m_objectList->setAlternatingRowColors(true);
 
-    auto *rightPanelTitle = new QLabel(QStringLiteral("场景对象"), m_contentPage);
+    auto *rightPanelTitle = new QLabel(QStringLiteral("场景对象"), rightPanel);
     rightPanelTitle->setStyleSheet(QStringLiteral("font-size: 12pt; font-weight: 700;"));
 
-    auto *rightPanel = new QWidget(m_contentPage);
     auto *rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setContentsMargins(12, 12, 12, 12);
     rightLayout->setSpacing(8);
     rightLayout->addWidget(rightPanelTitle);
+    rightLayout->addWidget(m_crosshairToggleButton);
     rightLayout->addWidget(m_objectList, 1);
     rightLayout->addWidget(m_summaryLabel);
 
@@ -202,3 +219,56 @@ void FourPaneViewer::updateSummary(const StudyPackage &package)
     m_summaryLabel->setText(summaryLines.join(QLatin1Char('\n')));
 }
 
+void FourPaneViewer::setCrosshairEnabled(bool enabled)
+{
+    const bool actualEnabled = enabled && m_hasDicomImage;
+    m_crosshairEnabled = actualEnabled;
+
+    if (m_crosshairToggleButton != nullptr) {
+        m_crosshairToggleButton->blockSignals(true);
+        m_crosshairToggleButton->setEnabled(m_hasDicomImage);
+        m_crosshairToggleButton->setChecked(actualEnabled);
+        m_crosshairToggleButton->setText(actualEnabled
+                                             ? QStringLiteral("十字线定位: 开")
+                                             : QStringLiteral("十字线定位: 关"));
+        m_crosshairToggleButton->blockSignals(false);
+    }
+
+    if (m_axialPanel != nullptr) {
+        m_axialPanel->setCrosshairEnabled(actualEnabled);
+    }
+    if (m_coronalPanel != nullptr) {
+        m_coronalPanel->setCrosshairEnabled(actualEnabled);
+    }
+    if (m_sagittalPanel != nullptr) {
+        m_sagittalPanel->setCrosshairEnabled(actualEnabled);
+    }
+}
+
+void FourPaneViewer::handleCrosshairToggle(bool checked)
+{
+    setCrosshairEnabled(checked);
+    if (!m_crosshairEnabled || m_axialPanel == nullptr) {
+        return;
+    }
+
+    const auto initialCursor = m_axialPanel->cursorWorldPosition();
+    syncMprCursor(initialCursor[0], initialCursor[1], initialCursor[2]);
+}
+
+void FourPaneViewer::syncMprCursor(double x, double y, double z)
+{
+    if (!m_crosshairEnabled
+        || m_syncingMprCursor
+        || m_axialPanel == nullptr
+        || m_coronalPanel == nullptr
+        || m_sagittalPanel == nullptr) {
+        return;
+    }
+
+    m_syncingMprCursor = true;
+    m_axialPanel->setCursorWorldPosition(x, y, z);
+    m_coronalPanel->setCursorWorldPosition(x, y, z);
+    m_sagittalPanel->setCursorWorldPosition(x, y, z);
+    m_syncingMprCursor = false;
+}
