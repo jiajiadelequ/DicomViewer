@@ -14,6 +14,7 @@
 #include <vtkImageMapper3D.h>
 #include <vtkImageReslice.h>
 #include <vtkInteractorStyleImage.h>
+#include <vtkMath.h>
 #include <vtkMatrix3x3.h>
 #include <vtkRenderWindow.h>
 #include <vtkRenderWindowInteractor.h>
@@ -308,6 +309,18 @@ void MprViewWidget::clearView(const QString &message)
     m_vtkWidget->renderWindow()->Render();
 }
 
+void MprViewWidget::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+
+    if (!m_hasImage) {
+        return;
+    }
+
+    fitImageToViewport();
+    m_vtkWidget->renderWindow()->Render();
+}
+
 void MprViewWidget::onSliceChanged(int value)
 {
     if (!m_hasImage || m_sliceGeometry.sliceCount <= 0) {
@@ -382,6 +395,25 @@ void MprViewWidget::applyCurrentSlice(int sliderValue)
     updateSliceLabel(clampedValue);
 }
 
+void MprViewWidget::fitImageToViewport()
+{
+    if (!m_hasImage || !m_imageActor->GetVisibility()) {
+        return;
+    }
+
+    m_reslice->Update();
+    m_windowLevel->Update();
+
+    const double *bounds = m_imageActor->GetBounds();
+    if (vtkMath::AreBoundsInitialized(bounds)) {
+        m_renderer->ResetCameraScreenSpace(bounds, 0.98);
+    } else {
+        m_renderer->ResetCameraScreenSpace(0.98);
+    }
+
+    m_renderer->ResetCameraClippingRange();
+}
+
 void MprViewWidget::resetCamera()
 {
     auto *camera = m_renderer->GetActiveCamera();
@@ -389,8 +421,7 @@ void MprViewWidget::resetCamera()
     camera->SetPosition(0.0, 0.0, 1.0);
     camera->SetFocalPoint(0.0, 0.0, 0.0);
     camera->SetViewUp(0.0, 1.0, 0.0);
-    m_renderer->ResetCamera();
-    m_renderer->ResetCameraClippingRange();
+    fitImageToViewport();
 }
 
 void MprViewWidget::updateSliceControls()
@@ -438,6 +469,7 @@ void MprViewWidget::updateWindowLevel(vtkImageData *imageData)
     m_windowLevel->SetWindow(window);
     m_windowLevel->SetLevel(level);
 }
+
 
 
 

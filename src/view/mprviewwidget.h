@@ -6,6 +6,7 @@
 #include <vtkSmartPointer.h>
 
 class QLabel;
+class QResizeEvent;
 class QSlider;
 class QVTKOpenGLNativeWidget;
 class vtkImageActor;
@@ -33,6 +34,9 @@ public:
     void setImageData(vtkImageData *imageData);
     void clearView(const QString &message);
 
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+
 private slots:
     void onSliceChanged(int value);
 
@@ -53,6 +57,7 @@ private:
 
     void configureSliceGeometry(vtkImageData *imageData);
     void applyCurrentSlice(int sliderValue);
+    void fitImageToViewport();
     void resetCamera();
     void updateSliceControls();
     void updateSliceLabel(int sliderValue);
