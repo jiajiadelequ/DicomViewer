@@ -85,6 +85,77 @@ void applyItkDirectionToVtkImage(VolumeImageType *itkImage, vtkImageData *vtkIma
     vtkImage->SetDirectionMatrix(directionMatrix);
 }
 
+struct WindowLevelPreset
+{
+    double window = 0.0;
+    double level = 0.0;
+    QString explanation;
+    bool isValid = false;
+};
+
+bool parseFirstDicomDecimal(const QString &rawValue, double *parsedValue)
+{
+    if (parsedValue == nullptr) {
+        return false;
+    }
+
+    const QStringList components = rawValue.split(QLatin1Char('\\'), Qt::SkipEmptyParts);
+    for (const QString &component : components) {
+        bool ok = false;
+        const double value = component.trimmed().toDouble(&ok);
+        if (ok) {
+            *parsedValue = value;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+QString firstDicomValue(const QString &rawValue)
+{
+    const QStringList components = rawValue.split(QLatin1Char('\\'), Qt::SkipEmptyParts);
+    return components.isEmpty() ? rawValue.trimmed() : components.front().trimmed();
+}
+
+WindowLevelPreset readWindowLevelPreset(VolumeImageIOType *imageIO, const std::string &fileName)
+{
+    WindowLevelPreset preset;
+    if (imageIO == nullptr || fileName.empty()) {
+        return preset;
+    }
+
+    try {
+        imageIO->SetFileName(fileName);
+        imageIO->ReadImageInformation();
+    } catch (const itk::ExceptionObject &) {
+        return preset;
+    }
+
+    std::string centerValue;
+    std::string widthValue;
+    if (!imageIO->GetValueFromTag("0028|1050", centerValue)
+        || !imageIO->GetValueFromTag("0028|1051", widthValue)) {
+        return preset;
+    }
+
+    const QString centerText = QString::fromStdString(centerValue);
+    const QString widthText = QString::fromStdString(widthValue);
+    if (!parseFirstDicomDecimal(centerText, &preset.level)
+        || !parseFirstDicomDecimal(widthText, &preset.window)
+        || preset.window < 1.0) {
+        return preset;
+    }
+
+    std::string explanationValue;
+    if (imageIO->GetValueFromTag("0028|1055", explanationValue)) {
+        preset.explanation = firstDicomValue(QString::fromStdString(explanationValue));
+    }
+
+    preset.isValid = true;
+    return preset;
+}
+
 QString readMetaDataTag(VolumeImageIOType *imageIO, const std::string &fileName, const char *tag)
 {
     if (imageIO == nullptr || fileName.empty()) {
@@ -172,6 +243,13 @@ void logOrientationDiagnostics(const QString &dicomPath,
                .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.back(), "0020|0013"))
                .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.back(), "0020|0032"))
                .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.back(), "0020|0037"));
+
+    const WindowLevelPreset preset = fileNames.empty() ? WindowLevelPreset {} : readWindowLevelPreset(metaImageIO, fileNames.front());
+    qInfo().noquote()
+        << QStringLiteral("[DICOM] voi-window=%1 voi-level=%2 explanation=%3")
+               .arg(preset.isValid ? QString::number(preset.window, 'f', 3) : QStringLiteral("<missing>"))
+               .arg(preset.isValid ? QString::number(preset.level, 'f', 3) : QStringLiteral("<missing>"))
+               .arg(preset.explanation.isEmpty() ? QStringLiteral("<none>") : preset.explanation);
 }
 }
 
@@ -331,6 +409,18 @@ bool FourPaneViewer::loadDicomSeries(const QString &dicomPath, QString *errorMes
 
         m_imageData = persistentImageData;
         logOrientationDiagnostics(dicomPath, reader->GetOutput(), m_imageData, fileNames);
+
+        const WindowLevelPreset preset = readWindowLevelPreset(VolumeImageIOType::New(), fileNames.front());
+        if (preset.isValid) {
+            m_axialPanel->setRecommendedWindowLevel(preset.window, preset.level);
+            m_coronalPanel->setRecommendedWindowLevel(preset.window, preset.level);
+            m_sagittalPanel->setRecommendedWindowLevel(preset.window, preset.level);
+        } else {
+            m_axialPanel->clearRecommendedWindowLevel();
+            m_coronalPanel->clearRecommendedWindowLevel();
+            m_sagittalPanel->clearRecommendedWindowLevel();
+        }
+
         m_axialPanel->setImageData(m_imageData);
         m_coronalPanel->setImageData(m_imageData);
         m_sagittalPanel->setImageData(m_imageData);
@@ -417,4 +507,6 @@ void FourPaneViewer::updateSummary(const StudyPackage &package)
     }
     m_summaryLabel->setText(summaryLines.join(QLatin1Char('\n')));
 }
+
+
 

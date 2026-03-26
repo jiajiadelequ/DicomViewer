@@ -28,6 +28,8 @@ public:
 
     explicit MprViewWidget(const QString &title, Orientation orientation, QWidget *parent = nullptr);
 
+    void setRecommendedWindowLevel(double window, double level);
+    void clearRecommendedWindowLevel();
     void setImageData(vtkImageData *imageData);
     void clearView(const QString &message);
 
@@ -67,5 +69,8 @@ private:
     vtkSmartPointer<vtkImageActor> m_imageActor;
     vtkSmartPointer<vtkImageData> m_imageData;
     SliceGeometry m_sliceGeometry;
+    double m_recommendedWindow = 0.0;
+    double m_recommendedLevel = 0.0;
+    bool m_hasRecommendedWindowLevel = false;
     bool m_hasImage = false;
 };

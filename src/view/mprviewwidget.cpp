@@ -249,6 +249,25 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     connect(m_slider, &QSlider::valueChanged, this, &MprViewWidget::onSliceChanged);
 }
 
+void MprViewWidget::setRecommendedWindowLevel(double window, double level)
+{
+    if (!std::isfinite(window) || !std::isfinite(level) || window <= 0.0) {
+        clearRecommendedWindowLevel();
+        return;
+    }
+
+    m_recommendedWindow = window;
+    m_recommendedLevel = level;
+    m_hasRecommendedWindowLevel = true;
+}
+
+void MprViewWidget::clearRecommendedWindowLevel()
+{
+    m_recommendedWindow = 0.0;
+    m_recommendedLevel = 0.0;
+    m_hasRecommendedWindowLevel = false;
+}
+
 void MprViewWidget::setImageData(vtkImageData *imageData)
 {
     if (imageData == nullptr) {
@@ -405,6 +424,12 @@ void MprViewWidget::updateSliceLabel(int sliderValue)
 
 void MprViewWidget::updateWindowLevel(vtkImageData *imageData)
 {
+    if (m_hasRecommendedWindowLevel) {
+        m_windowLevel->SetWindow(m_recommendedWindow);
+        m_windowLevel->SetLevel(m_recommendedLevel);
+        return;
+    }
+
     double scalarRange[2] { 0.0, 0.0 };
     imageData->GetScalarRange(scalarRange);
     const double window = std::max(1.0, scalarRange[1] - scalarRange[0]);
@@ -413,5 +438,6 @@ void MprViewWidget::updateWindowLevel(vtkImageData *imageData)
     m_windowLevel->SetWindow(window);
     m_windowLevel->SetLevel(level);
 }
+
 
 
