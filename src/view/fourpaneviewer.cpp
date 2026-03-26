@@ -9,6 +9,7 @@
 #include <QSplitter>
 #include <QStackedLayout>
 #include <QVBoxLayout>
+#include <QTimer>
 
 #include <vtkImageData.h>
 #include <vtkPolyData.h>
@@ -98,6 +99,15 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
 
     updateSummary(result.package);
     m_rootLayout->setCurrentWidget(m_contentPage);
+
+    if (result.imageData != nullptr) {
+        QTimer::singleShot(0, this, [this]() {
+            m_axialPanel->refreshView();
+            m_coronalPanel->refreshView();
+            m_sagittalPanel->refreshView();
+        });
+    }
+
     return true;
 }
 
@@ -191,3 +201,4 @@ void FourPaneViewer::updateSummary(const StudyPackage &package)
     }
     m_summaryLabel->setText(summaryLines.join(QLatin1Char('\n')));
 }
+

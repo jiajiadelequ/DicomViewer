@@ -289,10 +289,25 @@ void MprViewWidget::setImageData(vtkImageData *imageData)
     updateWindowLevel(m_imageData);
     m_imageActor->SetVisibility(true);
     updateSliceControls();
+    refreshView();
+}
+
+void MprViewWidget::refreshView()
+{
+    if (!m_hasImage || m_sliceGeometry.sliceCount <= 0) {
+        return;
+    }
+
+    updateWindowLevel(m_imageData);
+    applyCurrentSlice(m_slider->value());
+
+    if (!m_vtkWidget->isVisible() || m_vtkWidget->width() <= 0 || m_vtkWidget->height() <= 0) {
+        return;
+    }
+
     resetCamera();
     m_vtkWidget->renderWindow()->Render();
 }
-
 void MprViewWidget::clearView(const QString &message)
 {
     m_hasImage = false;
@@ -317,8 +332,7 @@ void MprViewWidget::resizeEvent(QResizeEvent *event)
         return;
     }
 
-    fitImageToViewport();
-    m_vtkWidget->renderWindow()->Render();
+    refreshView();
 }
 
 void MprViewWidget::onSliceChanged(int value)
@@ -401,6 +415,10 @@ void MprViewWidget::fitImageToViewport()
         return;
     }
 
+    if (!m_vtkWidget->isVisible() || m_vtkWidget->width() <= 0 || m_vtkWidget->height() <= 0) {
+        return;
+    }
+
     m_reslice->Update();
     m_windowLevel->Update();
 
@@ -469,6 +487,7 @@ void MprViewWidget::updateWindowLevel(vtkImageData *imageData)
     m_windowLevel->SetWindow(window);
     m_windowLevel->SetLevel(level);
 }
+
 
 
 

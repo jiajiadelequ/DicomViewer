@@ -32,6 +32,7 @@ public:
     void setRecommendedWindowLevel(double window, double level);
     void clearRecommendedWindowLevel();
     void setImageData(vtkImageData *imageData);
+    void refreshView();
     void clearView(const QString &message);
 
 protected:
@@ -79,3 +80,4 @@ private:
     bool m_hasRecommendedWindowLevel = false;
     bool m_hasImage = false;
 };
+
