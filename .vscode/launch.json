@@ -15,6 +15,21 @@
         }
       ],
       "console": "integratedTerminal"
+    },
+    {
+      "name": "Release DicomViewerSkeleton",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\build\\release\\DicomViewerSkeleton.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "build-release",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "D:\\Qt5\\5.15.2\\msvc2019_64\\bin;${workspaceFolder}\\third_party\\VTK9.4\\bin;${workspaceFolder}\\third_party\\GDCM-3.0.26-install\\Release\\bin;${workspaceFolder}\\third_party\\ITK545i\\Release\\bin;${env:PATH}"
+        }
+      ],
+      "console": "integratedTerminal"
     }
   ]
 }

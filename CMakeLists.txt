@@ -158,7 +158,7 @@ target_include_directories(DicomViewerSkeleton PRIVATE
 
 if(MSVC)
     target_compile_options(DicomViewerSkeleton PRIVATE
-        $<$<CONFIG:Release>:/Zi /Od>
+        $<$<CONFIG:Release>:/Zi>
     )
     target_link_options(DicomViewerSkeleton PRIVATE
         $<$<CONFIG:Release>:/DEBUG>
@@ -278,5 +278,6 @@ add_custom_command(TARGET dicom_to_stl POST_BUILD
     ${ITK_DLLS}
     $<TARGET_FILE_DIR:dicom_to_stl>
 )
+
 
 
