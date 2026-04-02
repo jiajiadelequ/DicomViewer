@@ -1,6 +1,8 @@
 #include <vtkCleanPolyData.h>
 #include <vtkDecimatePro.h>
 #include <vtkFlyingEdges3D.h>
+#include <vtkImageData.h>
+#include <vtkMatrix3x3.h>
 #include <vtkNew.h>
 #include <vtkOBJWriter.h>
 #include <vtkPointData.h>
@@ -33,6 +35,25 @@ using VolumeReaderType = itk::ImageSeriesReader<VolumeImageType>;
 using VolumeNamesGeneratorType = itk::GDCMSeriesFileNames;
 using VolumeImageIOType = itk::GDCMImageIO;
 using VolumeConnectorType = itk::ImageToVTKImageFilter<VolumeImageType>;
+
+void applyItkDirectionToVtkImage(VolumeImageType *itkImage, vtkImageData *vtkImage)
+{
+    if (itkImage == nullptr || vtkImage == nullptr) {
+        return;
+    }
+
+    vtkNew<vtkMatrix3x3> directionMatrix;
+    const auto &itkDirection = itkImage->GetDirection();
+    for (unsigned int row = 0; row < VolumeDimension; ++row) {
+        for (unsigned int column = 0; column < VolumeDimension; ++column) {
+            directionMatrix->SetElement(static_cast<int>(row),
+                                        static_cast<int>(column),
+                                        itkDirection(row, column));
+        }
+    }
+
+    vtkImage->SetDirectionMatrix(directionMatrix);
+}
 
 std::vector<std::string> selectLargestSeriesFiles(VolumeNamesGeneratorType *namesGenerator)
 {
@@ -99,6 +120,8 @@ int main(int argc, char *argv[])
             std::cerr << "Failed to convert DICOM series to VTK image: " << dicomDir.string() << "\n";
             return 3;
         }
+
+        applyItkDirectionToVtkImage(reader->GetOutput(), image);
 
         fs::create_directories(outputFile.parent_path());
 
