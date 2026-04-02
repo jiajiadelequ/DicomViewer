@@ -95,6 +95,7 @@ void SplitterGridWidget::applyColumnRatio(QSplitter *sourceToSkip)
     }
 
     m_syncingColumns = true;
+    // 上下两排必须共用同一组左右比例，否则四宫格会出现错位。
     const int left = static_cast<int>(m_columnRatio * 1000.0);
     const QList<int> sizes { left, 1000 - left };
     if (sourceToSkip != m_topRowSplitter) {

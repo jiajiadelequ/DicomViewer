@@ -1,53 +1,56 @@
 #include "fourpaneviewer.h"
 
+#include "fourpanecontentwidget.h"
 #include "modelviewwidget.h"
 #include "mprviewwidget.h"
-#include "splittergridwidget.h"
+#include "scenesidebarwidget.h"
+#include "viewerstatewidget.h"
 
-#include <QLabel>
-#include <QListWidget>
-#include <QListWidgetItem>
-#include <QPushButton>
-#include <QSplitter>
 #include <QStackedLayout>
+#include <QStringList>
 #include <QTimer>
-#include <QVBoxLayout>
+
+#include <array>
 
 #include <vtkImageData.h>
 #include <vtkPolyData.h>
 
+namespace
+{
+std::array<MprViewWidget *, 3> mprPanels(FourPaneContentWidget *contentPage)
+{
+    if (contentPage == nullptr) {
+        return { nullptr, nullptr, nullptr };
+    }
+
+    return {
+        contentPage->axialPanel(),
+        contentPage->coronalPanel(),
+        contentPage->sagittalPanel()
+    };
+}
+
+QString buildStudySummaryText(const StudyPackage &package)
+{
+    QStringList summaryLines;
+    summaryLines << QStringLiteral("病例目录: %1").arg(package.rootPath);
+    summaryLines << QStringLiteral("DICOM: %1").arg(package.dicomFiles.size());
+    summaryLines << QStringLiteral("模型: %1").arg(package.modelFiles.size());
+    if (!package.sceneFilePath.isEmpty()) {
+        summaryLines << QStringLiteral("场景配置: %1").arg(package.sceneFilePath);
+    }
+
+    return summaryLines.join(QLatin1Char('\n'));
+}
+}
+
 FourPaneViewer::FourPaneViewer(QWidget *parent)
     : QWidget(parent)
     , m_rootLayout(new QStackedLayout(this))
-    , m_statePage(new QWidget(this))
-    , m_stateTitleLabel(new QLabel(m_statePage))
-    , m_stateMessageLabel(new QLabel(m_statePage))
+    , m_statePage(new ViewerStateWidget(this))
     , m_contentPage(nullptr)
-    , m_axialPanel(nullptr)
-    , m_coronalPanel(nullptr)
-    , m_sagittalPanel(nullptr)
-    , m_volumePanel(nullptr)
-    , m_objectList(nullptr)
-    , m_summaryLabel(nullptr)
-    , m_crosshairToggleButton(nullptr)
     , m_imageData(vtkSmartPointer<vtkImageData>::New())
 {
-    auto *stateLayout = new QVBoxLayout(m_statePage);
-    stateLayout->setContentsMargins(48, 48, 48, 48);
-    stateLayout->addStretch();
-
-    m_stateTitleLabel->setAlignment(Qt::AlignCenter);
-    m_stateTitleLabel->setStyleSheet(QStringLiteral("font-size: 18pt; font-weight: 700;"));
-
-    m_stateMessageLabel->setAlignment(Qt::AlignCenter);
-    m_stateMessageLabel->setWordWrap(true);
-    m_stateMessageLabel->setStyleSheet(QStringLiteral("font-size: 11pt; color: #6b7280;"));
-
-    stateLayout->addWidget(m_stateTitleLabel);
-    stateLayout->addSpacing(12);
-    stateLayout->addWidget(m_stateMessageLabel);
-    stateLayout->addStretch();
-
     m_rootLayout->setContentsMargins(0, 0, 0, 0);
     m_rootLayout->addWidget(m_statePage);
 
@@ -64,56 +67,56 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
     }
 
     ensureContentPage();
+    const auto panels = mprPanels(m_contentPage);
+    auto *volumePanel = m_contentPage->volumePanel();
+    auto *sidebarPanel = m_contentPage->sidebarPanel();
 
     if (result.imageData != nullptr) {
         m_hasDicomImage = true;
         setCrosshairEnabled(false);
         m_imageData = result.imageData;
         if (result.windowLevelPreset.isValid) {
-            m_axialPanel->setRecommendedWindowLevel(result.windowLevelPreset.window, result.windowLevelPreset.level);
-            m_coronalPanel->setRecommendedWindowLevel(result.windowLevelPreset.window, result.windowLevelPreset.level);
-            m_sagittalPanel->setRecommendedWindowLevel(result.windowLevelPreset.window, result.windowLevelPreset.level);
+            for (MprViewWidget *panel : panels) {
+                panel->setRecommendedWindowLevel(result.windowLevelPreset.window, result.windowLevelPreset.level);
+            }
         } else {
-            m_axialPanel->clearRecommendedWindowLevel();
-            m_coronalPanel->clearRecommendedWindowLevel();
-            m_sagittalPanel->clearRecommendedWindowLevel();
+            for (MprViewWidget *panel : panels) {
+                panel->clearRecommendedWindowLevel();
+            }
         }
 
-        m_axialPanel->setImageData(m_imageData);
-        m_coronalPanel->setImageData(m_imageData);
-        m_sagittalPanel->setImageData(m_imageData);
+        for (MprViewWidget *panel : panels) {
+            panel->setImageData(m_imageData);
+        }
     } else {
         m_hasDicomImage = false;
         setCrosshairEnabled(false);
         m_imageData = nullptr;
         const QString dicomText = QStringLiteral("未发现 DICOM 序列");
-        m_axialPanel->clearRecommendedWindowLevel();
-        m_coronalPanel->clearRecommendedWindowLevel();
-        m_sagittalPanel->clearRecommendedWindowLevel();
-        m_axialPanel->clearView(dicomText);
-        m_coronalPanel->clearView(dicomText);
-        m_sagittalPanel->clearView(dicomText);
+        for (MprViewWidget *panel : panels) {
+            panel->clearRecommendedWindowLevel();
+            panel->clearView(dicomText);
+        }
     }
 
-    m_objectList->clear();
-    m_volumePanel->clearScene(result.models.empty()
-                                  ? QStringLiteral("未发现模型文件")
-                                  : QStringLiteral("已发现 %1 个模型文件").arg(static_cast<int>(result.models.size())));
-    m_volumePanel->setReferenceImageData(result.imageData);
+    sidebarPanel->clearObjects();
+    volumePanel->clearScene(result.models.empty()
+                                ? QStringLiteral("未发现模型文件")
+                                : QStringLiteral("已发现 %1 个模型文件").arg(static_cast<int>(result.models.size())));
+    volumePanel->setReferenceImageData(result.imageData);
     for (const LoadedModelData &model : result.models) {
-        auto *item = new QListWidgetItem(model.filePath, m_objectList);
-        item->setCheckState(Qt::Checked);
-        m_volumePanel->addModelData(model.filePath, model.polyData);
+        sidebarPanel->addObject(model.filePath);
+        volumePanel->addModelData(model.filePath, model.polyData);
     }
 
-    updateSummary(result.package);
+    sidebarPanel->setSummaryText(buildStudySummaryText(result.package));
     m_rootLayout->setCurrentWidget(m_contentPage);
 
     if (result.imageData != nullptr) {
         QTimer::singleShot(0, this, [this]() {
-            m_axialPanel->refreshView();
-            m_coronalPanel->refreshView();
-            m_sagittalPanel->refreshView();
+            for (MprViewWidget *panel : mprPanels(m_contentPage)) {
+                panel->refreshView();
+            }
         });
     }
 
@@ -122,22 +125,21 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
 
 void FourPaneViewer::showEmptyState()
 {
-    m_stateTitleLabel->setText(QStringLiteral("未加载病例"));
-    m_stateMessageLabel->setText(QStringLiteral("请选择一个病例包目录。加载成功后，这里会显示三视图 MPR 和 3D 模型。"));
+    m_statePage->setState(QStringLiteral("未加载病例"),
+                          QStringLiteral("请选择一个病例包目录。加载成功后，这里会显示三视图 MPR 和 3D 模型。"));
     m_rootLayout->setCurrentWidget(m_statePage);
 }
 
 void FourPaneViewer::showLoadingState(const QString &message)
 {
-    m_stateTitleLabel->setText(QStringLiteral("正在加载"));
-    m_stateMessageLabel->setText(message);
+    m_statePage->setState(QStringLiteral("正在加载"), message);
     m_rootLayout->setCurrentWidget(m_statePage);
 }
 
 void FourPaneViewer::showErrorState(const QString &message)
 {
-    m_stateTitleLabel->setText(QStringLiteral("加载失败"));
-    m_stateMessageLabel->setText(message.isEmpty() ? QStringLiteral("病例包加载失败。") : message);
+    m_statePage->setState(QStringLiteral("加载失败"),
+                          message.isEmpty() ? QStringLiteral("病例包加载失败。") : message);
     m_rootLayout->setCurrentWidget(m_statePage);
 }
 
@@ -147,73 +149,22 @@ void FourPaneViewer::ensureContentPage()
         return;
     }
 
-    m_contentPage = new QWidget(this);
-    m_axialPanel = new MprViewWidget(QStringLiteral("Axial MPR"), MprViewWidget::Orientation::Axial, m_contentPage);
-    m_coronalPanel = new MprViewWidget(QStringLiteral("Coronal MPR"), MprViewWidget::Orientation::Coronal, m_contentPage);
-    m_sagittalPanel = new MprViewWidget(QStringLiteral("Sagittal MPR"), MprViewWidget::Orientation::Sagittal, m_contentPage);
-    m_volumePanel = new ModelViewWidget(m_contentPage);
+    m_contentPage = new FourPaneContentWidget(this);
 
-    auto *rightPanel = new QWidget(m_contentPage);
-    m_objectList = new QListWidget(rightPanel);
-    m_summaryLabel = new QLabel(QStringLiteral("尚未加载病例包"), rightPanel);
-    m_crosshairToggleButton = new QPushButton(QStringLiteral("十字线定位: 关"), rightPanel);
-    m_crosshairToggleButton->setCheckable(true);
-    m_crosshairToggleButton->setChecked(false);
-    m_crosshairToggleButton->setEnabled(false);
-
-    connect(m_axialPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
-    connect(m_coronalPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
-    connect(m_sagittalPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
-    connect(m_axialPanel, &MprViewWidget::windowLevelChanged, this, &FourPaneViewer::syncWindowLevel);
-    connect(m_coronalPanel, &MprViewWidget::windowLevelChanged, this, &FourPaneViewer::syncWindowLevel);
-    connect(m_sagittalPanel, &MprViewWidget::windowLevelChanged, this, &FourPaneViewer::syncWindowLevel);
-    connect(m_volumePanel, &ModelViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
-    connect(m_crosshairToggleButton, &QPushButton::toggled, this, &FourPaneViewer::handleCrosshairToggle);
-
-    auto *viewArea = new SplitterGridWidget(
-        m_axialPanel,
-        m_coronalPanel,
-        m_sagittalPanel,
-        m_volumePanel,
-        m_contentPage);
-
-    m_objectList->setAlternatingRowColors(true);
-
-    auto *rightPanelTitle = new QLabel(QStringLiteral("场景对象"), rightPanel);
-    rightPanelTitle->setStyleSheet(QStringLiteral("font-size: 12pt; font-weight: 700;"));
-
-    auto *rightLayout = new QVBoxLayout(rightPanel);
-    rightLayout->setContentsMargins(12, 12, 12, 12);
-    rightLayout->setSpacing(8);
-    rightLayout->addWidget(rightPanelTitle);
-    rightLayout->addWidget(m_crosshairToggleButton);
-    rightLayout->addWidget(m_objectList, 1);
-    rightLayout->addWidget(m_summaryLabel);
-
-    auto *rootSplitter = new QSplitter(Qt::Horizontal, m_contentPage);
-    rootSplitter->addWidget(viewArea);
-    rootSplitter->addWidget(rightPanel);
-    rootSplitter->setStretchFactor(0, 5);
-    rootSplitter->setStretchFactor(1, 2);
-    rootSplitter->setChildrenCollapsible(false);
-
-    auto *layout = new QVBoxLayout(m_contentPage);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(rootSplitter);
+    for (MprViewWidget *panel : mprPanels(m_contentPage)) {
+        connect(panel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
+        connect(panel, &MprViewWidget::windowLevelChanged, this, &FourPaneViewer::syncWindowLevel);
+    }
+    connect(m_contentPage->volumePanel(),
+            &ModelViewWidget::cursorWorldPositionChanged,
+            this,
+            &FourPaneViewer::syncCrosshairPosition);
+    connect(m_contentPage->sidebarPanel(),
+            &SceneSidebarWidget::crosshairToggled,
+            this,
+            &FourPaneViewer::handleCrosshairToggle);
 
     m_rootLayout->addWidget(m_contentPage);
-}
-
-void FourPaneViewer::updateSummary(const StudyPackage &package)
-{
-    QStringList summaryLines;
-    summaryLines << QStringLiteral("病例目录: %1").arg(package.rootPath);
-    summaryLines << QStringLiteral("DICOM: %1").arg(package.dicomFiles.size());
-    summaryLines << QStringLiteral("模型: %1").arg(package.modelFiles.size());
-    if (!package.sceneFilePath.isEmpty()) {
-        summaryLines << QStringLiteral("场景配置: %1").arg(package.sceneFilePath);
-    }
-    m_summaryLabel->setText(summaryLines.join(QLatin1Char('\n')));
 }
 
 void FourPaneViewer::setCrosshairEnabled(bool enabled)
@@ -221,38 +172,28 @@ void FourPaneViewer::setCrosshairEnabled(bool enabled)
     const bool actualEnabled = enabled && m_hasDicomImage;
     m_crosshairEnabled = actualEnabled;
 
-    if (m_crosshairToggleButton != nullptr) {
-        m_crosshairToggleButton->blockSignals(true);
-        m_crosshairToggleButton->setEnabled(m_hasDicomImage);
-        m_crosshairToggleButton->setChecked(actualEnabled);
-        m_crosshairToggleButton->setText(actualEnabled
-                                             ? QStringLiteral("十字线定位: 开")
-                                             : QStringLiteral("十字线定位: 关"));
-        m_crosshairToggleButton->blockSignals(false);
+    if (m_contentPage != nullptr) {
+        m_contentPage->sidebarPanel()->setCrosshairState(m_hasDicomImage, actualEnabled);
     }
 
-    if (m_axialPanel != nullptr) {
-        m_axialPanel->setCrosshairEnabled(actualEnabled);
+    for (MprViewWidget *panel : mprPanels(m_contentPage)) {
+        if (panel != nullptr) {
+            panel->setCrosshairEnabled(actualEnabled);
+        }
     }
-    if (m_coronalPanel != nullptr) {
-        m_coronalPanel->setCrosshairEnabled(actualEnabled);
-    }
-    if (m_sagittalPanel != nullptr) {
-        m_sagittalPanel->setCrosshairEnabled(actualEnabled);
-    }
-    if (m_volumePanel != nullptr) {
-        m_volumePanel->setCrosshairEnabled(actualEnabled);
+    if (m_contentPage != nullptr) {
+        m_contentPage->volumePanel()->setCrosshairEnabled(actualEnabled);
     }
 }
 
 void FourPaneViewer::handleCrosshairToggle(bool checked)
 {
     setCrosshairEnabled(checked);
-    if (!m_crosshairEnabled || m_axialPanel == nullptr) {
+    if (!m_crosshairEnabled || m_contentPage == nullptr) {
         return;
     }
 
-    const auto initialCursor = m_axialPanel->cursorWorldPosition();
+    const auto initialCursor = m_contentPage->axialPanel()->cursorWorldPosition();
     syncCrosshairPosition(initialCursor[0], initialCursor[1], initialCursor[2]);
 }
 
@@ -260,33 +201,27 @@ void FourPaneViewer::syncCrosshairPosition(double x, double y, double z)
 {
     if (!m_crosshairEnabled
         || m_syncingCrosshair
-        || m_axialPanel == nullptr
-        || m_coronalPanel == nullptr
-        || m_sagittalPanel == nullptr
-        || m_volumePanel == nullptr) {
+        || m_contentPage == nullptr) {
         return;
     }
 
     m_syncingCrosshair = true;
-    m_axialPanel->setCursorWorldPosition(x, y, z);
-    m_coronalPanel->setCursorWorldPosition(x, y, z);
-    m_sagittalPanel->setCursorWorldPosition(x, y, z);
-    m_volumePanel->setCursorWorldPosition(x, y, z);
+    for (MprViewWidget *panel : mprPanels(m_contentPage)) {
+        panel->setCursorWorldPosition(x, y, z);
+    }
+    m_contentPage->volumePanel()->setCursorWorldPosition(x, y, z);
     m_syncingCrosshair = false;
 }
 
 void FourPaneViewer::syncWindowLevel(double window, double level)
 {
-    if (m_syncingWindowLevel
-        || m_axialPanel == nullptr
-        || m_coronalPanel == nullptr
-        || m_sagittalPanel == nullptr) {
+    if (m_syncingWindowLevel || m_contentPage == nullptr) {
         return;
     }
 
     m_syncingWindowLevel = true;
-    m_axialPanel->setWindowLevel(window, level);
-    m_coronalPanel->setWindowLevel(window, level);
-    m_sagittalPanel->setWindowLevel(window, level);
+    for (MprViewWidget *panel : mprPanels(m_contentPage)) {
+        panel->setWindowLevel(window, level);
+    }
     m_syncingWindowLevel = false;
 }

@@ -8,6 +8,7 @@ class QWidget;
 class vtkImageData;
 class vtkImageMapToWindowLevelColors;
 
+// 负责单个多平面重建视图的窗宽窗位状态、右上角叠加文字和拖拽计算。
 class MprWindowLevelController final
 {
 public:

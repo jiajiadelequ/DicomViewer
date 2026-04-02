@@ -5,13 +5,9 @@
 #include <QWidget>
 #include <vtkSmartPointer.h>
 
-class QLabel;
-class QListWidget;
-class ModelViewWidget;
-class MprViewWidget;
-class QPushButton;
+class FourPaneContentWidget;
 class QStackedLayout;
-class QWidget;
+class ViewerStateWidget;
 class vtkImageData;
 
 class FourPaneViewer final : public QWidget
@@ -28,25 +24,14 @@ public:
 
 private:
     void ensureContentPage();
-    void updateSummary(const StudyPackage &package);
     void setCrosshairEnabled(bool enabled);
     void handleCrosshairToggle(bool checked);
     void syncCrosshairPosition(double x, double y, double z);
     void syncWindowLevel(double window, double level);
 
     QStackedLayout *m_rootLayout;
-    QWidget *m_statePage;
-    QLabel *m_stateTitleLabel;
-    QLabel *m_stateMessageLabel;
-    QWidget *m_contentPage;
-
-    MprViewWidget *m_axialPanel;
-    MprViewWidget *m_coronalPanel;
-    MprViewWidget *m_sagittalPanel;
-    ModelViewWidget *m_volumePanel;
-    QListWidget *m_objectList;
-    QLabel *m_summaryLabel;
-    QPushButton *m_crosshairToggleButton;
+    ViewerStateWidget *m_statePage;
+    FourPaneContentWidget *m_contentPage;
     vtkSmartPointer<vtkImageData> m_imageData;
     bool m_hasDicomImage = false;
     bool m_crosshairEnabled = false;

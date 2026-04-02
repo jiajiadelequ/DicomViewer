@@ -202,6 +202,7 @@ SliceGeometry buildSliceGeometry(vtkImageData *imageData, Orientation orientatio
         return geometry;
     }
 
+    // 预先算好这一朝向下完整且稳定的重切片平面描述，后续渲染和定位都复用它。
     const auto preset = orientationPreset(orientation);
     geometry.center = imageCenter(imageData);
     geometry.xAxis = normalizeAxis(preset.xAxis);

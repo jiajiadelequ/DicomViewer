@@ -146,6 +146,7 @@ void ModelViewCrosshairController::updateGeometry()
         return;
     }
 
+    // 把 3D 光标限制在合并后的模型/影像边界内，避免场景数据不完整时光标失真。
     m_crosshairCursor->SetModelBounds(bounds);
     m_crosshairCursor->SetFocalPoint(m_cursorWorldPosition[0],
                                      m_cursorWorldPosition[1],
@@ -156,6 +157,7 @@ void ModelViewCrosshairController::updateGeometry()
 
 bool ModelViewCrosshairController::cameraBounds(double bounds[6]) const
 {
+    // 优先使用显式记录的模型/影像边界，避免对象临时隐藏后相机重置不稳定。
     if (m_hasModelBounds && mergeBounds(m_modelBounds.data(), bounds, false)) {
         return true;
     }

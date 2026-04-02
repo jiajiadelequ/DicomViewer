@@ -5,6 +5,7 @@
 class QResizeEvent;
 class QSplitter;
 
+// 通过共享列比例和行比例，保证可拖拽的 2x2 视图区始终保持对齐。
 class SplitterGridWidget final : public QWidget
 {
 public:

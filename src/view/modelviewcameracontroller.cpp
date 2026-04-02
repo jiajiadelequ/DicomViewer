@@ -44,6 +44,7 @@ ModelViewCameraController::ModelViewCameraController(QWidget *buttonParent,
     m_viewButton->setMenu(viewMenu);
     updateViewButtonText();
 
+    // 按官方方向标记部件的用法配置方向轴，让它始终跟随主相机。
     m_orientationAxes->SetTotalLength(1.2, 1.2, 1.2);
     m_orientationAxes->SetShaftTypeToCylinder();
     m_orientationAxes->SetCylinderRadius(0.5 * m_orientationAxes->GetCylinderRadius());
@@ -131,6 +132,7 @@ bool ModelViewCameraController::applyStandardView(StandardView view)
     const double spanZ = std::max(1.0, bounds[5] - bounds[4]);
     const double distance = 2.5 * std::max({ spanX, spanY, spanZ });
 
+    // 为每个标准视角固定解剖学朝上的方向，保证切换结果稳定可预期。
     camera->SetFocalPoint(center);
     switch (view) {
     case StandardView::Coronal:

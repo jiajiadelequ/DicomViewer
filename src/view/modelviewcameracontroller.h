@@ -12,6 +12,7 @@ class vtkOrientationMarkerWidget;
 class vtkRenderer;
 class vtkRenderWindowInteractor;
 
+// 负责 3D 标准视角切换，以及右上角方向轴标记。
 class ModelViewCameraController final
 {
 public:

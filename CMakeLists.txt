@@ -119,6 +119,12 @@ set(PROJECT_SOURCES
     src/view/modelviewcameracontroller.cpp
     src/view/modelviewcrosshaircontroller.h
     src/view/modelviewcrosshaircontroller.cpp
+    src/view/fourpanecontentwidget.h
+    src/view/fourpanecontentwidget.cpp
+    src/view/viewerstatewidget.h
+    src/view/viewerstatewidget.cpp
+    src/view/scenesidebarwidget.h
+    src/view/scenesidebarwidget.cpp
     src/view/mprviewwidget.h
     src/view/mprviewwidget.cpp
     src/view/modelviewwidget.h

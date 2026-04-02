@@ -136,6 +136,7 @@ bool MprWindowLevelController::dragWindowLevel(const QPoint &position, const QSi
         return false;
     }
 
+    // 用当前窗宽缩放拖拽手势，避免窄窗和宽窗预设下的操作手感差异过大。
     const double widthScale = std::max(1.0, m_dragStartWindow);
     const double levelScale = std::max(1.0, m_dragStartWindow);
     const double deltaX = static_cast<double>(position.x() - m_dragStartPosition.x());

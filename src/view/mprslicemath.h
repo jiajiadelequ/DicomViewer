@@ -8,6 +8,8 @@ class vtkImageData;
 
 namespace MprSliceMath
 {
+// 集中处理不同朝向下的切片几何和世界坐标/索引坐标换算，
+// 让视图部件只负责重切片管线和交互编排。
 using Axis = std::array<double, 3>;
 
 enum class Orientation

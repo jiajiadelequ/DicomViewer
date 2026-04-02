@@ -14,6 +14,7 @@ class vtkImageData;
 class vtkPolyData;
 class vtkRenderer;
 
+// 负责三维十字线显示、模型表面拾取，以及相关的场景边界计算。
 class ModelViewCrosshairController final
 {
 public:

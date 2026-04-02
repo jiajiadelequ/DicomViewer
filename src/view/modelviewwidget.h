@@ -19,6 +19,7 @@ class vtkImageData;
 class vtkPolyData;
 class vtkRenderer;
 
+// 只保留 Qt 外壳职责，把 3D 相机和十字线交互交给独立控制器。
 class ModelViewWidget final : public QWidget
 {
     Q_OBJECT
