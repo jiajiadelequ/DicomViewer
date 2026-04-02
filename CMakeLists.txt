@@ -109,6 +109,12 @@ set(PROJECT_SOURCES
     src/core/studyloader.cpp
     src/view/viewportpanel.h
     src/view/viewportpanel.cpp
+    src/view/splittergridwidget.h
+    src/view/splittergridwidget.cpp
+    src/view/mprslicemath.h
+    src/view/mprslicemath.cpp
+    src/view/mprwindowlevelcontroller.h
+    src/view/mprwindowlevelcontroller.cpp
     src/view/mprviewwidget.h
     src/view/mprviewwidget.cpp
     src/view/modelviewwidget.h

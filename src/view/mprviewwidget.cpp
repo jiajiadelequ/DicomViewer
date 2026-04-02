@@ -1,5 +1,7 @@
 #include "mprviewwidget.h"
 
+#include "mprwindowlevelcontroller.h"
+
 #include <QEvent>
 #include <QLabel>
 #include <QMouseEvent>
@@ -20,7 +22,6 @@
 #include <vtkImageReslice.h>
 #include <vtkInteractorStyleImage.h>
 #include <vtkMath.h>
-#include <vtkMatrix3x3.h>
 #include <vtkPoints.h>
 #include <vtkPolyData.h>
 #include <vtkPolyDataMapper.h>
@@ -36,196 +37,17 @@
 
 namespace
 {
-using Axis = std::array<double, 3>;
-
-QString orientationName(MprViewWidget::Orientation orientation)
-{
-    switch (orientation) {
-    case MprViewWidget::Orientation::Axial:
-        return QStringLiteral("Axial");
-    case MprViewWidget::Orientation::Coronal:
-        return QStringLiteral("Coronal");
-    case MprViewWidget::Orientation::Sagittal:
-        return QStringLiteral("Sagittal");
-    }
-
-    return QStringLiteral("Unknown");
-}
-
-struct OrientationPreset
-{
-    Axis xAxis;
-    Axis yAxis;
-    bool reverseSlider = false;
-};
-
-OrientationPreset orientationPreset(MprViewWidget::Orientation orientation)
-{
-    switch (orientation) {
-    case MprViewWidget::Orientation::Axial:
-        return { Axis { 1.0, 0.0, 0.0 }, Axis { 0.0, -1.0, 0.0 }, true };
-    case MprViewWidget::Orientation::Coronal:
-        return { Axis { 1.0, 0.0, 0.0 }, Axis { 0.0, 0.0, 1.0 }, false };
-    case MprViewWidget::Orientation::Sagittal:
-        return { Axis { 0.0, 1.0, 0.0 }, Axis { 0.0, 0.0, 1.0 }, false };
-    }
-
-    return { Axis { 1.0, 0.0, 0.0 }, Axis { 0.0, 1.0, 0.0 }, false };
-}
-
-double directionElement(vtkImageData *imageData, int row, int column)
-{
-    auto *directionMatrix = imageData != nullptr ? imageData->GetDirectionMatrix() : nullptr;
-    if (directionMatrix == nullptr) {
-        return row == column ? 1.0 : 0.0;
-    }
-
-    return directionMatrix->GetElement(row, column);
-}
-
-Axis crossProduct(const Axis &lhs, const Axis &rhs)
-{
-    return Axis {
-        lhs[1] * rhs[2] - lhs[2] * rhs[1],
-        lhs[2] * rhs[0] - lhs[0] * rhs[2],
-        lhs[0] * rhs[1] - lhs[1] * rhs[0]
-    };
-}
-
-double dotProduct(const Axis &lhs, const Axis &rhs)
-{
-    return lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2];
-}
-
-double magnitude(const Axis &axis)
-{
-    return std::sqrt(dotProduct(axis, axis));
-}
-
-Axis normalizeAxis(const Axis &axis)
-{
-    const double length = magnitude(axis);
-    if (length <= 0.0) {
-        return Axis { 0.0, 0.0, 1.0 };
-    }
-
-    return Axis { axis[0] / length, axis[1] / length, axis[2] / length };
-}
-
-Axis subtractAxes(const Axis &lhs, const Axis &rhs)
-{
-    return Axis { lhs[0] - rhs[0], lhs[1] - rhs[1], lhs[2] - rhs[2] };
-}
-
-Axis addAxes(const Axis &lhs, const Axis &rhs)
-{
-    return Axis { lhs[0] + rhs[0], lhs[1] + rhs[1], lhs[2] + rhs[2] };
-}
-
-Axis scaleAxis(const Axis &axis, double scale)
-{
-    return Axis { axis[0] * scale, axis[1] * scale, axis[2] * scale };
-}
-
-Axis pointFromIndex(vtkImageData *imageData, double i, double j, double k)
-{
-    double origin[3] { 0.0, 0.0, 0.0 };
-    double spacing[3] { 1.0, 1.0, 1.0 };
-    imageData->GetOrigin(origin);
-    imageData->GetSpacing(spacing);
-
-    const double scaledIndex[3] { i * spacing[0], j * spacing[1], k * spacing[2] };
-    Axis point { origin[0], origin[1], origin[2] };
-    for (int row = 0; row < 3; ++row) {
-        for (int column = 0; column < 3; ++column) {
-            point[row] += directionElement(imageData, row, column) * scaledIndex[column];
-        }
-    }
-
-    return point;
-}
-
-Axis imageCenter(vtkImageData *imageData)
-{
-    int extent[6] { 0, -1, 0, -1, 0, -1 };
-    imageData->GetExtent(extent);
-
-    return pointFromIndex(imageData,
-                          0.5 * static_cast<double>(extent[0] + extent[1]),
-                          0.5 * static_cast<double>(extent[2] + extent[3]),
-                          0.5 * static_cast<double>(extent[4] + extent[5]));
-}
-
-std::pair<double, double> projectionRange(vtkImageData *imageData, const Axis &center, const Axis &axis)
-{
-    int extent[6] { 0, -1, 0, -1, 0, -1 };
-    imageData->GetExtent(extent);
-
-    double minimum = 0.0;
-    double maximum = 0.0;
-    bool firstSample = true;
-
-    for (int i : { extent[0], extent[1] }) {
-        for (int j : { extent[2], extent[3] }) {
-            for (int k : { extent[4], extent[5] }) {
-                const Axis point = pointFromIndex(imageData, i, j, k);
-                const double projection = dotProduct(subtractAxes(point, center), axis);
-                if (firstSample) {
-                    minimum = projection;
-                    maximum = projection;
-                    firstSample = false;
-                } else {
-                    minimum = std::min(minimum, projection);
-                    maximum = std::max(maximum, projection);
-                }
-            }
-        }
-    }
-
-    return { minimum, maximum };
-}
-
-double spacingAlongAxis(vtkImageData *imageData, const Axis &axis)
-{
-    double spacing[3] { 1.0, 1.0, 1.0 };
-    imageData->GetSpacing(spacing);
-
-    Axis worldToIndex {
-        (directionElement(imageData, 0, 0) * axis[0] + directionElement(imageData, 1, 0) * axis[1] + directionElement(imageData, 2, 0) * axis[2])
-            / std::max(spacing[0], 1e-6),
-        (directionElement(imageData, 0, 1) * axis[0] + directionElement(imageData, 1, 1) * axis[1] + directionElement(imageData, 2, 1) * axis[2])
-            / std::max(spacing[1], 1e-6),
-        (directionElement(imageData, 0, 2) * axis[0] + directionElement(imageData, 1, 2) * axis[1] + directionElement(imageData, 2, 2) * axis[2])
-            / std::max(spacing[2], 1e-6)
-    };
-
-    const double indexStep = magnitude(worldToIndex);
-    return indexStep > 0.0 ? 1.0 / indexStep : 1.0;
-}
-
-int sampleCount(double minimum, double maximum, double spacing)
-{
-    if (spacing <= 0.0) {
-        return 1;
-    }
-
-    return std::max(1, static_cast<int>(std::lround((maximum - minimum) / spacing)) + 1);
-}
-
-double maxOutputCoordinate(double origin, double spacing, int minExtent, int maxExtent)
-{
-    return origin + static_cast<double>(std::max(0, maxExtent - minExtent)) * spacing;
-}
+using Axis = MprSliceMath::Axis;
 }
 
 MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWidget *parent)
     : QWidget(parent)
     , m_orientation(orientation)
     , m_titleLabel(new QLabel(title, this))
-    , m_windowLevelLabel(new QLabel(this))
     , m_sliceLabel(new QLabel(QStringLiteral("未加载"), this))
     , m_slider(new QSlider(Qt::Horizontal, this))
     , m_vtkWidget(new QVTKOpenGLNativeWidget(this))
+    , m_windowLevelController(std::make_unique<MprWindowLevelController>(m_vtkWidget))
     , m_renderer(vtkSmartPointer<vtkRenderer>::New())
     , m_reslice(vtkSmartPointer<vtkImageReslice>::New())
     , m_windowLevel(vtkSmartPointer<vtkImageMapToWindowLevelColors>::New())
@@ -251,18 +73,6 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     m_vtkWidget->interactor()->SetInteractorStyle(imageStyle);
     m_vtkWidget->installEventFilter(this);
     m_vtkWidget->setMouseTracking(true);
-
-    m_windowLevelLabel->setParent(m_vtkWidget);
-    m_windowLevelLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_windowLevelLabel->setStyleSheet(QStringLiteral(
-        "padding: 4px 8px;"
-        "border-radius: 4px;"
-        "background-color: rgba(10, 12, 16, 180);"
-        "color: #f3f4f6;"
-        "font-size: 10pt;"
-        "font-weight: 600;"));
-    m_windowLevelLabel->setText(QStringLiteral("WW: -, WL: -"));
-    m_windowLevelLabel->hide();
 
     m_reslice->SetOutputDimensionality(2);
     m_reslice->SetInterpolationModeToLinear();
@@ -308,19 +118,14 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     layout->addWidget(m_slider);
 
     connect(m_slider, &QSlider::valueChanged, this, &MprViewWidget::onSliceChanged);
-    updateOverlayPosition();
+    m_windowLevelController->updateOverlayPosition();
 }
+
+MprViewWidget::~MprViewWidget() = default;
 
 void MprViewWidget::setRecommendedWindowLevel(double window, double level)
 {
-    if (!std::isfinite(window) || !std::isfinite(level) || window <= 0.0) {
-        clearRecommendedWindowLevel();
-        return;
-    }
-
-    m_recommendedWindow = window;
-    m_recommendedLevel = level;
-    m_hasRecommendedWindowLevel = true;
+    m_windowLevelController->setRecommendedWindowLevel(window, level);
 }
 
 void MprViewWidget::setWindowLevel(double window, double level)
@@ -330,9 +135,7 @@ void MprViewWidget::setWindowLevel(double window, double level)
 
 void MprViewWidget::clearRecommendedWindowLevel()
 {
-    m_recommendedWindow = 0.0;
-    m_recommendedLevel = 0.0;
-    m_hasRecommendedWindowLevel = false;
+    m_windowLevelController->clearRecommendedWindowLevel();
 }
 
 void MprViewWidget::setImageData(vtkImageData *imageData)
@@ -353,8 +156,8 @@ void MprViewWidget::setImageData(vtkImageData *imageData)
     }
 
     m_cursorWorldPosition = m_sliceGeometry.center;
-    updateWindowLevel(m_imageData);
-    applyWindowLevelValues();
+    m_windowLevelController->ensureInitialized(m_imageData);
+    m_windowLevelController->applyTo(m_windowLevel);
     m_imageActor->SetVisibility(true);
     m_crosshairActor->SetVisibility(m_crosshairEnabled);
     updateSliceControls();
@@ -393,9 +196,7 @@ void MprViewWidget::clearView(const QString &message)
     m_crosshairDragActive = false;
     m_sliceGeometry = SliceGeometry {};
     m_cursorWorldPosition = Axis { 0.0, 0.0, 0.0 };
-    m_currentWindow = 0.0;
-    m_currentLevel = 0.0;
-    m_windowLevelDragActive = false;
+    m_windowLevelController->reset();
 
     m_slider->blockSignals(true);
     m_slider->setEnabled(false);
@@ -407,7 +208,6 @@ void MprViewWidget::clearView(const QString &message)
     m_reslice->SetInputData(static_cast<vtkImageData *>(nullptr));
     m_imageActor->SetVisibility(false);
     m_crosshairActor->SetVisibility(false);
-    updateWindowLevelOverlay();
     m_vtkWidget->renderWindow()->Render();
 }
 
@@ -436,10 +236,11 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
         }
 
         if (!m_crosshairEnabled && mouseEvent->modifiers() == Qt::NoModifier) {
-            m_windowLevelDragActive = true;
-            m_windowLevelDragStartPosition = mouseEvent->pos();
-            m_windowLevelDragStartWindow = m_currentWindow;
-            m_windowLevelDragStartLevel = m_currentLevel;
+            if (!m_windowLevelController->canStartDrag()) {
+                break;
+            }
+
+            m_windowLevelController->beginDrag(mouseEvent->pos());
             return true;
         }
         break;
@@ -460,22 +261,16 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
 
-        if (m_windowLevelDragActive) {
+        if (m_windowLevelController->isDragging()) {
             if ((mouseEvent->buttons() & Qt::LeftButton) == 0) {
-                m_windowLevelDragActive = false;
+                m_windowLevelController->endDrag();
                 break;
             }
 
-            const double widthScale = std::max(1.0, m_windowLevelDragStartWindow);
-            const double levelScale = std::max(1.0, m_windowLevelDragStartWindow);
-            const double deltaX = static_cast<double>(mouseEvent->pos().x() - m_windowLevelDragStartPosition.x());
-            const double deltaY = static_cast<double>(mouseEvent->pos().y() - m_windowLevelDragStartPosition.y());
-            const double normalizedX = deltaX / std::max(1, m_vtkWidget->width());
-            const double normalizedY = deltaY / std::max(1, m_vtkWidget->height());
-
-            const double window = std::max(1.0, m_windowLevelDragStartWindow + normalizedX * widthScale * 4.0);
-            const double level = m_windowLevelDragStartLevel - normalizedY * levelScale * 4.0;
-            setWindowLevelInternal(window, level, true);
+            MprWindowLevelController::Values values;
+            if (m_windowLevelController->dragWindowLevel(mouseEvent->pos(), m_vtkWidget->size(), &values)) {
+                setWindowLevelInternal(values.window, values.level, true);
+            }
             return true;
         }
         break;
@@ -486,8 +281,8 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
             m_crosshairDragActive = false;
             return true;
         }
-        if (m_windowLevelDragActive && mouseEvent->button() == Qt::LeftButton) {
-            m_windowLevelDragActive = false;
+        if (m_windowLevelController->isDragging() && mouseEvent->button() == Qt::LeftButton) {
+            m_windowLevelController->endDrag();
             return true;
         }
         break;
@@ -502,7 +297,7 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
 void MprViewWidget::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
-    updateOverlayPosition();
+    m_windowLevelController->updateOverlayPosition();
 
     if (!m_hasImage) {
         return;
@@ -528,36 +323,7 @@ void MprViewWidget::onSliceChanged(int value)
 
 void MprViewWidget::configureSliceGeometry(vtkImageData *imageData)
 {
-    m_sliceGeometry = SliceGeometry {};
-    if (imageData == nullptr) {
-        return;
-    }
-
-    const auto preset = orientationPreset(m_orientation);
-    m_sliceGeometry.center = imageCenter(imageData);
-    m_sliceGeometry.xAxis = normalizeAxis(preset.xAxis);
-    m_sliceGeometry.yAxis = normalizeAxis(preset.yAxis);
-    m_sliceGeometry.normalAxis = normalizeAxis(crossProduct(m_sliceGeometry.xAxis, m_sliceGeometry.yAxis));
-    m_sliceGeometry.reverseSlider = preset.reverseSlider;
-
-    const auto xRange = projectionRange(imageData, m_sliceGeometry.center, m_sliceGeometry.xAxis);
-    const auto yRange = projectionRange(imageData, m_sliceGeometry.center, m_sliceGeometry.yAxis);
-    const auto sliceRange = projectionRange(imageData, m_sliceGeometry.center, m_sliceGeometry.normalAxis);
-
-    m_sliceGeometry.xSpacing = std::max(1e-3, spacingAlongAxis(imageData, m_sliceGeometry.xAxis));
-    m_sliceGeometry.ySpacing = std::max(1e-3, spacingAlongAxis(imageData, m_sliceGeometry.yAxis));
-    m_sliceGeometry.sliceSpacing = std::max(1e-3, spacingAlongAxis(imageData, m_sliceGeometry.normalAxis));
-    m_sliceGeometry.minSlice = sliceRange.first;
-    m_sliceGeometry.sliceCount = sampleCount(sliceRange.first, sliceRange.second, m_sliceGeometry.sliceSpacing);
-    m_sliceGeometry.outputOrigin = { xRange.first, yRange.first, 0.0 };
-    m_sliceGeometry.outputExtent = {
-        0,
-        sampleCount(xRange.first, xRange.second, m_sliceGeometry.xSpacing) - 1,
-        0,
-        sampleCount(yRange.first, yRange.second, m_sliceGeometry.ySpacing) - 1,
-        0,
-        0
-    };
+    m_sliceGeometry = MprSliceMath::buildSliceGeometry(imageData, m_orientation);
 
     m_reslice->SetResliceAxesDirectionCosines(m_sliceGeometry.xAxis.data(),
                                               m_sliceGeometry.yAxis.data(),
@@ -623,8 +389,8 @@ void MprViewWidget::renderCurrentState(bool fitViewport)
     }
 
     m_crosshairActor->SetVisibility(m_crosshairEnabled);
-    updateWindowLevel(m_imageData);
-    applyWindowLevelValues();
+    m_windowLevelController->ensureInitialized(m_imageData);
+    m_windowLevelController->applyTo(m_windowLevel);
     applyCurrentSlice(m_slider->value());
     updateCrosshairGeometry();
 
@@ -650,13 +416,13 @@ void MprViewWidget::setCursorWorldPositionInternal(const Axis &worldPosition, bo
         return;
     }
 
-    const double xPosition = dotProduct(subtractAxes(worldPosition, m_sliceGeometry.center), m_sliceGeometry.xAxis);
-    const double yPosition = dotProduct(subtractAxes(worldPosition, m_sliceGeometry.center), m_sliceGeometry.yAxis);
+    const double xPosition = MprSliceMath::dotProduct(MprSliceMath::subtractAxes(worldPosition, m_sliceGeometry.center), m_sliceGeometry.xAxis);
+    const double yPosition = MprSliceMath::dotProduct(MprSliceMath::subtractAxes(worldPosition, m_sliceGeometry.center), m_sliceGeometry.yAxis);
     const int sliderValue = sliderValueForWorldPosition(worldPosition);
     const Axis sliceOrigin = sliceOriginForSliderValue(sliderValue);
-    m_cursorWorldPosition = addAxes(addAxes(sliceOrigin,
-                                            scaleAxis(m_sliceGeometry.xAxis, xPosition)),
-                                    scaleAxis(m_sliceGeometry.yAxis, yPosition));
+    m_cursorWorldPosition = MprSliceMath::addAxes(MprSliceMath::addAxes(sliceOrigin,
+                                                                        MprSliceMath::scaleAxis(m_sliceGeometry.xAxis, xPosition)),
+                                                  MprSliceMath::scaleAxis(m_sliceGeometry.yAxis, yPosition));
 
     m_slider->blockSignals(true);
     m_slider->setValue(sliderValue);
@@ -673,12 +439,12 @@ void MprViewWidget::setCursorWorldPositionInternal(const Axis &worldPosition, bo
 
 void MprViewWidget::updateCursorWorldPositionFromSlider(int sliderValue)
 {
-    const double xPosition = dotProduct(subtractAxes(m_cursorWorldPosition, m_sliceGeometry.center), m_sliceGeometry.xAxis);
-    const double yPosition = dotProduct(subtractAxes(m_cursorWorldPosition, m_sliceGeometry.center), m_sliceGeometry.yAxis);
+    const double xPosition = MprSliceMath::dotProduct(MprSliceMath::subtractAxes(m_cursorWorldPosition, m_sliceGeometry.center), m_sliceGeometry.xAxis);
+    const double yPosition = MprSliceMath::dotProduct(MprSliceMath::subtractAxes(m_cursorWorldPosition, m_sliceGeometry.center), m_sliceGeometry.yAxis);
     const Axis sliceOrigin = sliceOriginForSliderValue(sliderValue);
-    m_cursorWorldPosition = addAxes(addAxes(sliceOrigin,
-                                            scaleAxis(m_sliceGeometry.xAxis, xPosition)),
-                                    scaleAxis(m_sliceGeometry.yAxis, yPosition));
+    m_cursorWorldPosition = MprSliceMath::addAxes(MprSliceMath::addAxes(sliceOrigin,
+                                                                        MprSliceMath::scaleAxis(m_sliceGeometry.xAxis, xPosition)),
+                                                  MprSliceMath::scaleAxis(m_sliceGeometry.yAxis, yPosition));
 }
 
 void MprViewWidget::updateCrosshairGeometry()
@@ -689,19 +455,19 @@ void MprViewWidget::updateCrosshairGeometry()
 
     const Axis sliceOrigin = sliceOriginForSliderValue(m_slider->value());
     const double xMinimum = m_sliceGeometry.outputOrigin[0];
-    const double xMaximum = maxOutputCoordinate(m_sliceGeometry.outputOrigin[0],
-                                                m_sliceGeometry.xSpacing,
-                                                m_sliceGeometry.outputExtent[0],
-                                                m_sliceGeometry.outputExtent[1]);
+    const double xMaximum = MprSliceMath::maxOutputCoordinate(m_sliceGeometry.outputOrigin[0],
+                                                              m_sliceGeometry.xSpacing,
+                                                              m_sliceGeometry.outputExtent[0],
+                                                              m_sliceGeometry.outputExtent[1]);
     const double yMinimum = m_sliceGeometry.outputOrigin[1];
-    const double yMaximum = maxOutputCoordinate(m_sliceGeometry.outputOrigin[1],
-                                                m_sliceGeometry.ySpacing,
-                                                m_sliceGeometry.outputExtent[2],
-                                                m_sliceGeometry.outputExtent[3]);
-    const double xPosition = std::clamp(dotProduct(subtractAxes(m_cursorWorldPosition, sliceOrigin), m_sliceGeometry.xAxis),
+    const double yMaximum = MprSliceMath::maxOutputCoordinate(m_sliceGeometry.outputOrigin[1],
+                                                              m_sliceGeometry.ySpacing,
+                                                              m_sliceGeometry.outputExtent[2],
+                                                              m_sliceGeometry.outputExtent[3]);
+    const double xPosition = std::clamp(MprSliceMath::dotProduct(MprSliceMath::subtractAxes(m_cursorWorldPosition, sliceOrigin), m_sliceGeometry.xAxis),
                                         xMinimum,
                                         xMaximum);
-    const double yPosition = std::clamp(dotProduct(subtractAxes(m_cursorWorldPosition, sliceOrigin), m_sliceGeometry.yAxis),
+    const double yPosition = std::clamp(MprSliceMath::dotProduct(MprSliceMath::subtractAxes(m_cursorWorldPosition, sliceOrigin), m_sliceGeometry.yAxis),
                                         yMinimum,
                                         yMaximum);
     constexpr double overlayDepth = 0.1;
@@ -736,110 +502,31 @@ void MprViewWidget::updateSliceLabel(int sliderValue)
 
     const int clampedValue = std::clamp(sliderValue, 0, m_sliceGeometry.sliceCount - 1);
     m_sliceLabel->setText(QStringLiteral("%1 Slice: %2 / %3")
-                              .arg(orientationName(m_orientation))
+                              .arg(MprSliceMath::orientationName(m_orientation))
                               .arg(clampedValue + 1)
                               .arg(m_sliceGeometry.sliceCount));
 }
 
-void MprViewWidget::updateWindowLevel(vtkImageData *imageData)
-{
-    if (m_currentWindow > 0.0 && std::isfinite(m_currentLevel)) {
-        return;
-    }
-
-    if (m_hasRecommendedWindowLevel && m_recommendedWindow > 0.0) {
-        m_currentWindow = m_recommendedWindow;
-        m_currentLevel = m_recommendedLevel;
-        return;
-    }
-
-    double scalarRange[2] { 0.0, 0.0 };
-    imageData->GetScalarRange(scalarRange);
-    m_currentWindow = std::max(1.0, scalarRange[1] - scalarRange[0]);
-    m_currentLevel = 0.5 * (scalarRange[0] + scalarRange[1]);
-}
-
-void MprViewWidget::applyWindowLevelValues()
-{
-    const double clampedWindow = std::max(1.0, m_currentWindow);
-    m_currentWindow = clampedWindow;
-    m_windowLevel->SetWindow(clampedWindow);
-    m_windowLevel->SetLevel(m_currentLevel);
-    updateWindowLevelOverlay();
-}
-
-void MprViewWidget::updateWindowLevelOverlay()
-{
-    if (!m_hasImage || m_currentWindow <= 0.0) {
-        m_windowLevelLabel->hide();
-        return;
-    }
-
-    m_windowLevelLabel->setText(QStringLiteral("WW: %1  WL: %2")
-                                    .arg(static_cast<int>(std::lround(m_currentWindow)))
-                                    .arg(static_cast<int>(std::lround(m_currentLevel))));
-    m_windowLevelLabel->adjustSize();
-    updateOverlayPosition();
-    m_windowLevelLabel->show();
-    m_windowLevelLabel->raise();
-}
-
-void MprViewWidget::updateOverlayPosition()
-{
-    if (m_windowLevelLabel == nullptr || m_vtkWidget == nullptr) {
-        return;
-    }
-
-    const int margin = 8;
-    const QSize labelSize = m_windowLevelLabel->sizeHint();
-    const int x = std::max(margin, m_vtkWidget->width() - labelSize.width() - margin);
-    m_windowLevelLabel->move(x, margin);
-}
-
 void MprViewWidget::setWindowLevelInternal(double window, double level, bool emitSignal)
 {
-    if (!std::isfinite(window) || !std::isfinite(level)) {
-        return;
-    }
-
-    m_currentWindow = std::max(1.0, window);
-    m_currentLevel = level;
-    applyWindowLevelValues();
+    m_windowLevelController->setCurrentWindowLevel(window, level);
+    m_windowLevelController->applyTo(m_windowLevel);
     m_vtkWidget->renderWindow()->Render();
 
     if (emitSignal) {
-        emit windowLevelChanged(m_currentWindow, m_currentLevel);
+        const auto values = m_windowLevelController->currentWindowLevel();
+        emit windowLevelChanged(values.window, values.level);
     }
 }
 
 std::array<double, 3> MprViewWidget::sliceOriginForSliderValue(int sliderValue) const
 {
-    if (m_sliceGeometry.sliceCount <= 0) {
-        return m_sliceGeometry.center;
-    }
-
-    const int clampedValue = std::clamp(sliderValue, 0, m_sliceGeometry.sliceCount - 1);
-    const int sliceIndex = m_sliceGeometry.reverseSlider
-        ? (m_sliceGeometry.sliceCount - 1 - clampedValue)
-        : clampedValue;
-    const double sliceOffset = m_sliceGeometry.minSlice + sliceIndex * m_sliceGeometry.sliceSpacing;
-    return addAxes(m_sliceGeometry.center,
-                   scaleAxis(m_sliceGeometry.normalAxis, sliceOffset));
+    return MprSliceMath::sliceOriginForSliderValue(m_sliceGeometry, sliderValue);
 }
 
 int MprViewWidget::sliderValueForWorldPosition(const Axis &worldPosition) const
 {
-    if (m_sliceGeometry.sliceCount <= 0 || m_sliceGeometry.sliceSpacing <= 0.0) {
-        return 0;
-    }
-
-    const double projection = dotProduct(subtractAxes(worldPosition, m_sliceGeometry.center), m_sliceGeometry.normalAxis);
-    const int sliceIndex = std::clamp(static_cast<int>(std::lround((projection - m_sliceGeometry.minSlice) / m_sliceGeometry.sliceSpacing)),
-                                      0,
-                                      std::max(0, m_sliceGeometry.sliceCount - 1));
-    return m_sliceGeometry.reverseSlider
-        ? (m_sliceGeometry.sliceCount - 1 - sliceIndex)
-        : sliceIndex;
+    return MprSliceMath::sliderValueForWorldPosition(m_sliceGeometry, worldPosition);
 }
 
 bool MprViewWidget::pickWorldPosition(const QPoint &widgetPosition, Axis *worldPosition) const
@@ -858,9 +545,9 @@ bool MprViewWidget::pickWorldPosition(const QPoint &widgetPosition, Axis *worldP
     double pickedPosition[3] { 0.0, 0.0, 0.0 };
     m_imagePicker->GetPickPosition(pickedPosition);
     const Axis sliceOrigin = sliceOriginForSliderValue(m_slider->value());
-    *worldPosition = addAxes(addAxes(sliceOrigin,
-                                     scaleAxis(m_sliceGeometry.xAxis, pickedPosition[0])),
-                             scaleAxis(m_sliceGeometry.yAxis, pickedPosition[1]));
+    *worldPosition = MprSliceMath::addAxes(MprSliceMath::addAxes(sliceOrigin,
+                                                                 MprSliceMath::scaleAxis(m_sliceGeometry.xAxis, pickedPosition[0])),
+                                           MprSliceMath::scaleAxis(m_sliceGeometry.yAxis, pickedPosition[1]));
     return true;
 }
 
