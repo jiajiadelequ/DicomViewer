@@ -7,6 +7,7 @@
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSplitter>
 #include <QStackedLayout>
 #include <QTimer>
@@ -14,6 +15,151 @@
 
 #include <vtkImageData.h>
 #include <vtkPolyData.h>
+
+namespace
+{
+class SplitterGridWidget final : public QWidget
+{
+public:
+    SplitterGridWidget(QWidget *topLeft,
+                       QWidget *topRight,
+                       QWidget *bottomLeft,
+                       QWidget *bottomRight,
+                       QWidget *parent = nullptr)
+        : QWidget(parent)
+        , m_topRowSplitter(new QSplitter(Qt::Horizontal, this))
+        , m_bottomRowSplitter(new QSplitter(Qt::Horizontal, this))
+        , m_rowSplitter(new QSplitter(Qt::Vertical, this))
+    {
+        configureSplitter(m_topRowSplitter);
+        configureSplitter(m_bottomRowSplitter);
+        configureSplitter(m_rowSplitter);
+
+        m_topRowSplitter->addWidget(topLeft);
+        m_topRowSplitter->addWidget(topRight);
+        m_bottomRowSplitter->addWidget(bottomLeft);
+        m_bottomRowSplitter->addWidget(bottomRight);
+
+        m_rowSplitter->addWidget(m_topRowSplitter);
+        m_rowSplitter->addWidget(m_bottomRowSplitter);
+
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+        layout->addWidget(m_rowSplitter);
+
+        connect(m_topRowSplitter,
+                &QSplitter::splitterMoved,
+                this,
+                [this](int, int) {
+                    updateColumnRatio(m_topRowSplitter);
+                    applyColumnRatio(m_topRowSplitter);
+                });
+        connect(m_bottomRowSplitter,
+                &QSplitter::splitterMoved,
+                this,
+                [this](int, int) {
+                    updateColumnRatio(m_bottomRowSplitter);
+                    applyColumnRatio(m_bottomRowSplitter);
+                });
+        connect(m_rowSplitter,
+                &QSplitter::splitterMoved,
+                this,
+                [this](int, int) {
+                    updateRowRatio();
+                });
+
+        QTimer::singleShot(0, this, [this]() {
+            applyRowRatio();
+            applyColumnRatio(nullptr);
+        });
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QWidget::resizeEvent(event);
+        applyRowRatio();
+        applyColumnRatio(nullptr);
+    }
+
+private:
+    void configureSplitter(QSplitter *splitter)
+    {
+        splitter->setChildrenCollapsible(false);
+        splitter->setStretchFactor(0, 1);
+        splitter->setStretchFactor(1, 1);
+    }
+
+    void updateColumnRatio(QSplitter *source)
+    {
+        const QList<int> sizes = source->sizes();
+        if (sizes.size() != 2) {
+            return;
+        }
+
+        const int total = sizes[0] + sizes[1];
+        if (total <= 0) {
+            return;
+        }
+
+        m_columnRatio = qBound(0.05, static_cast<double>(sizes[0]) / static_cast<double>(total), 0.95);
+    }
+
+    void applyColumnRatio(QSplitter *sourceToSkip)
+    {
+        if (m_syncingColumns) {
+            return;
+        }
+
+        m_syncingColumns = true;
+        const int left = static_cast<int>(m_columnRatio * 1000.0);
+        const QList<int> sizes { left, 1000 - left };
+        if (sourceToSkip != m_topRowSplitter) {
+            m_topRowSplitter->setSizes(sizes);
+        }
+        if (sourceToSkip != m_bottomRowSplitter) {
+            m_bottomRowSplitter->setSizes(sizes);
+        }
+        m_syncingColumns = false;
+    }
+
+    void updateRowRatio()
+    {
+        const QList<int> sizes = m_rowSplitter->sizes();
+        if (sizes.size() != 2) {
+            return;
+        }
+
+        const int total = sizes[0] + sizes[1];
+        if (total <= 0) {
+            return;
+        }
+
+        m_rowRatio = qBound(0.05, static_cast<double>(sizes[0]) / static_cast<double>(total), 0.95);
+    }
+
+    void applyRowRatio()
+    {
+        if (m_syncingRows) {
+            return;
+        }
+
+        m_syncingRows = true;
+        const int top = static_cast<int>(m_rowRatio * 1000.0);
+        m_rowSplitter->setSizes(QList<int> { top, 1000 - top });
+        m_syncingRows = false;
+    }
+
+    QSplitter *m_topRowSplitter;
+    QSplitter *m_bottomRowSplitter;
+    QSplitter *m_rowSplitter;
+    double m_columnRatio = 0.5;
+    double m_rowRatio = 0.5;
+    bool m_syncingColumns = false;
+    bool m_syncingRows = false;
+};
+}
 
 FourPaneViewer::FourPaneViewer(QWidget *parent)
     : QWidget(parent)
@@ -163,22 +309,12 @@ void FourPaneViewer::ensureContentPage()
     connect(m_sagittalPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncMprCursor);
     connect(m_crosshairToggleButton, &QPushButton::toggled, this, &FourPaneViewer::handleCrosshairToggle);
 
-    auto *gridHorizontalTop = new QSplitter(Qt::Horizontal, m_contentPage);
-    gridHorizontalTop->addWidget(m_axialPanel);
-    gridHorizontalTop->addWidget(m_coronalPanel);
-    gridHorizontalTop->setChildrenCollapsible(false);
-
-    auto *gridHorizontalBottom = new QSplitter(Qt::Horizontal, m_contentPage);
-    gridHorizontalBottom->addWidget(m_sagittalPanel);
-    gridHorizontalBottom->addWidget(m_volumePanel);
-    gridHorizontalBottom->setChildrenCollapsible(false);
-
-    auto *gridVertical = new QSplitter(Qt::Vertical, m_contentPage);
-    gridVertical->addWidget(gridHorizontalTop);
-    gridVertical->addWidget(gridHorizontalBottom);
-    gridVertical->setChildrenCollapsible(false);
-    gridVertical->setStretchFactor(0, 1);
-    gridVertical->setStretchFactor(1, 1);
+    auto *viewArea = new SplitterGridWidget(
+        m_axialPanel,
+        m_coronalPanel,
+        m_sagittalPanel,
+        m_volumePanel,
+        m_contentPage);
 
     m_objectList->setAlternatingRowColors(true);
 
@@ -194,7 +330,7 @@ void FourPaneViewer::ensureContentPage()
     rightLayout->addWidget(m_summaryLabel);
 
     auto *rootSplitter = new QSplitter(Qt::Horizontal, m_contentPage);
-    rootSplitter->addWidget(gridVertical);
+    rootSplitter->addWidget(viewArea);
     rootSplitter->addWidget(rightPanel);
     rootSplitter->setStretchFactor(0, 5);
     rootSplitter->setStretchFactor(1, 2);
