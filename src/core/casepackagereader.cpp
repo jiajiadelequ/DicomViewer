@@ -122,7 +122,18 @@ bool canReadAsDicom(DicomImageIOType *imageIO, const QFileInfo &fileInfo)
     }
 }
 
-bool directoryLooksLikeDicom(const QString &directoryPath)
+bool shouldSkipCandidateDirectory(const QString &directoryName)
+{
+    static const QStringList skippedNames {
+        QStringLiteral("model"),
+        QStringLiteral("models"),
+        QStringLiteral("meta"),
+        QStringLiteral("__macosx")
+    };
+    return skippedNames.contains(directoryName, Qt::CaseInsensitive);
+}
+
+bool directoryLooksLikeDicom(DicomImageIOType *imageIO, const QString &directoryPath)
 {
     const QDir directory(directoryPath);
     const QFileInfoList files = directory.entryInfoList(QDir::Files | QDir::Readable | QDir::NoSymLinks,
@@ -130,8 +141,6 @@ bool directoryLooksLikeDicom(const QString &directoryPath)
     if (files.isEmpty()) {
         return false;
     }
-
-    auto imageIO = DicomImageIOType::New();
 
     int likelyProbeCount = 0;
     for (const QFileInfo &fileInfo : files) {
@@ -192,13 +201,24 @@ int directoryDepth(const QDir &rootDir, const QString &directoryPath)
 QStringList candidateDirectories(const QDir &rootDir)
 {
     QStringList results;
-    results.append(QDir::toNativeSeparators(rootDir.absolutePath()));
+    const QString rootPath = QDir::toNativeSeparators(rootDir.absolutePath());
+    results.append(rootPath);
 
-    QDirIterator iterator(rootDir.absolutePath(),
-                          QDir::Dirs | QDir::NoDotAndDotDot,
-                          QDirIterator::Subdirectories);
-    while (iterator.hasNext()) {
-        results.append(QDir::toNativeSeparators(iterator.next()));
+    QStringList pendingDirectories { rootPath };
+    while (!pendingDirectories.isEmpty()) {
+        const QString currentPath = pendingDirectories.takeLast();
+        const QDir currentDir(currentPath);
+        const QFileInfoList childDirectories = currentDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable | QDir::NoSymLinks,
+                                                                        QDir::Name | QDir::IgnoreCase);
+        for (const QFileInfo &childInfo : childDirectories) {
+            if (shouldSkipCandidateDirectory(childInfo.fileName())) {
+                continue;
+            }
+
+            const QString childPath = QDir::toNativeSeparators(childInfo.absoluteFilePath());
+            results.append(childPath);
+            pendingDirectories.append(childPath);
+        }
     }
 
     results.removeDuplicates();
@@ -268,10 +288,14 @@ bool isBetterDicomMatch(const DicomDirectoryMatch &candidate, const DicomDirecto
 
 DicomDirectoryMatch inspectDicomDirectory(const QDir &rootDir,
                                          const QString &directoryPath,
+                                         DicomImageIOType *probeImageIO,
                                          const StudyLoadFeedback *feedback)
 {
     DicomDirectoryMatch candidate;
-    if (directoryPath.isEmpty() || isCancelled(feedback) || !directoryLooksLikeDicom(directoryPath)) {
+    if (directoryPath.isEmpty()
+        || probeImageIO == nullptr
+        || isCancelled(feedback)
+        || !directoryLooksLikeDicom(probeImageIO, directoryPath)) {
         return candidate;
     }
 
@@ -293,17 +317,18 @@ DicomDirectoryMatch resolveDicomDirectory(const QDir &rootDir, const StudyLoadFe
     DicomDirectoryMatch bestMatch;
     const QString rootPath = QDir::toNativeSeparators(rootDir.absolutePath());
     const QString preferredPath = findChildDirectory(rootDir, {QStringLiteral("dicom"), QStringLiteral("dicoms")});
+    auto probeImageIO = DicomImageIOType::New();
 
     reportProgress(feedback, QStringLiteral("正在扫描病例目录中的 DICOM 序列..."), 10);
 
     if (!preferredPath.isEmpty()) {
-        const DicomDirectoryMatch preferredMatch = inspectDicomDirectory(rootDir, preferredPath, feedback);
+        const DicomDirectoryMatch preferredMatch = inspectDicomDirectory(rootDir, preferredPath, probeImageIO, feedback);
         if (preferredMatch.isValid() || isCancelled(feedback)) {
             return preferredMatch;
         }
     }
 
-    const DicomDirectoryMatch rootMatch = inspectDicomDirectory(rootDir, rootPath, feedback);
+    const DicomDirectoryMatch rootMatch = inspectDicomDirectory(rootDir, rootPath, probeImageIO, feedback);
     if (rootMatch.isValid() || isCancelled(feedback)) {
         return rootMatch;
     }
@@ -330,7 +355,7 @@ DicomDirectoryMatch resolveDicomDirectory(const QDir &rootDir, const StudyLoadFe
                        QStringLiteral("正在扫描 DICOM 候选目录...\n%1").arg(directoryPath),
                        percent);
 
-        const DicomDirectoryMatch candidate = inspectDicomDirectory(rootDir, directoryPath, feedback);
+        const DicomDirectoryMatch candidate = inspectDicomDirectory(rootDir, directoryPath, probeImageIO, feedback);
         if (isBetterDicomMatch(candidate, bestMatch)) {
             bestMatch = candidate;
         }

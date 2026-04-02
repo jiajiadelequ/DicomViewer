@@ -3,6 +3,7 @@
 #include "casepackagereader.h"
 
 #include <QDebug>
+#include <QDir>
 #include <QFileInfo>
 #include <QLoggingCategory>
 #include <gdcmException.h>
@@ -216,6 +217,20 @@ std::vector<std::string> selectLargestSeriesFiles(VolumeNamesGeneratorType *name
     return largestSeriesFiles;
 }
 
+std::vector<std::string> toNativeDicomFileNames(const QStringList &filePaths)
+{
+    std::vector<std::string> nativeFileNames;
+    nativeFileNames.reserve(static_cast<std::size_t>(filePaths.size()));
+    for (const QString &filePath : filePaths) {
+        if (filePath.isEmpty()) {
+            continue;
+        }
+
+        nativeFileNames.push_back(QDir::toNativeSeparators(filePath).toStdString());
+    }
+    return nativeFileNames;
+}
+
 void logOrientationDiagnostics(const QString &dicomPath,
                                VolumeImageType *itkImage,
                                vtkImageData *vtkImage,
@@ -331,7 +346,10 @@ vtkSmartPointer<vtkPolyData> loadModelPolyData(const QString &filePath)
     return polyData;
 }
 
-void loadDicomData(const QString &dicomPath, StudyLoadResult *result, const StudyLoadFeedback *feedback)
+void loadDicomData(const QString &dicomPath,
+                   const QStringList &knownDicomFiles,
+                   StudyLoadResult *result,
+                   const StudyLoadFeedback *feedback)
 {
     if (result == nullptr || dicomPath.isEmpty()) {
         return;
@@ -346,11 +364,14 @@ void loadDicomData(const QString &dicomPath, StudyLoadResult *result, const Stud
         reportProgress(feedback,
                        QStringLiteral("正在识别主 DICOM 序列...\n%1").arg(dicomPath),
                        40);
-        auto namesGenerator = VolumeNamesGeneratorType::New();
-        namesGenerator->SetUseSeriesDetails(true);
-        namesGenerator->SetDirectory(dicomPath.toStdString());
+        std::vector<std::string> fileNames = toNativeDicomFileNames(knownDicomFiles);
+        if (fileNames.empty()) {
+            auto namesGenerator = VolumeNamesGeneratorType::New();
+            namesGenerator->SetUseSeriesDetails(true);
+            namesGenerator->SetDirectory(dicomPath.toStdString());
+            fileNames = selectLargestSeriesFiles(namesGenerator);
+        }
 
-        const auto fileNames = selectLargestSeriesFiles(namesGenerator);
         if (fileNames.empty()) {
             result->errorMessage = QStringLiteral("未在目录中识别到有效的 DICOM 序列: %1").arg(dicomPath);
             return;
@@ -403,6 +424,8 @@ void loadDicomData(const QString &dicomPath, StudyLoadResult *result, const Stud
         }
 
         auto persistentImageData = vtkSmartPointer<vtkImageData>::New();
+        // 这里必须做深拷贝。connector 输出依赖当前 ITK/VTK 桥接管线的生命周期，
+        // 直接浅拷贝会让后续 MPR 重切片访问到已经失效的体数据缓冲区。
         persistentImageData->DeepCopy(connectorOutput);
         applyItkDirectionToVtkImage(reader->GetOutput(), persistentImageData);
         persistentImageData->Modified();
@@ -483,7 +506,7 @@ StudyLoadResult StudyLoader::loadFromDirectory(const QString &rootPath, const St
         reportProgress(&feedback, QStringLiteral("已识别病例包结构，开始读取数据..."), 35);
 
         if (!result.package.dicomPath.isEmpty()) {
-            loadDicomData(result.package.dicomPath, &result, &feedback);
+            loadDicomData(result.package.dicomPath, result.package.dicomFiles, &result, &feedback);
             if (result.cancelled || !result.errorMessage.isEmpty()) {
                 return result;
             }
