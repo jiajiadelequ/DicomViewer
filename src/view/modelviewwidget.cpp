@@ -1,9 +1,11 @@
 #include "modelviewwidget.h"
 
+#include <QEvent>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -11,8 +13,14 @@
 
 #include <vtkActor.h>
 #include <vtkAxesActor.h>
+#include <vtkCamera.h>
 #include <vtkCaptionActor2D.h>
+#include <vtkCellPicker.h>
+#include <vtkCursor3D.h>
 #include <vtkGenericOpenGLRenderWindow.h>
+#include <vtkImageData.h>
+#include <vtkInteractorStyleTrackballCamera.h>
+#include <vtkMath.h>
 #include <vtkNew.h>
 #include <vtkOrientationMarkerWidget.h>
 #include <vtkPolyData.h>
@@ -21,8 +29,35 @@
 #include <vtkRenderer.h>
 #include <vtkRenderWindowInteractor.h>
 #include <vtkTextProperty.h>
-#include <vtkCamera.h>
-#include <vtkMath.h>
+
+#include <algorithm>
+#include <cmath>
+
+namespace
+{
+using Axis = std::array<double, 3>;
+using BoundsArray = std::array<double, 6>;
+
+bool mergeBounds(const double source[6], double target[6], bool hasTarget)
+{
+    if (!vtkMath::AreBoundsInitialized(source)) {
+        return hasTarget;
+    }
+
+    if (!hasTarget) {
+        std::copy(source, source + 6, target);
+        return true;
+    }
+
+    target[0] = std::min(target[0], source[0]);
+    target[1] = std::max(target[1], source[1]);
+    target[2] = std::min(target[2], source[2]);
+    target[3] = std::max(target[3], source[3]);
+    target[4] = std::min(target[4], source[4]);
+    target[5] = std::max(target[5], source[5]);
+    return true;
+}
+}
 
 ModelViewWidget::ModelViewWidget(QWidget *parent)
     : QWidget(parent)
@@ -30,6 +65,9 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
     , m_statusLabel(new QLabel(QStringLiteral("等待加载模型"), this))
     , m_vtkWidget(new QVTKOpenGLNativeWidget(this))
     , m_renderer(vtkSmartPointer<vtkRenderer>::New())
+    , m_crosshairActor(vtkSmartPointer<vtkActor>::New())
+    , m_crosshairCursor(vtkSmartPointer<vtkCursor3D>::New())
+    , m_modelPicker(vtkSmartPointer<vtkCellPicker>::New())
     , m_orientationAxes(vtkSmartPointer<vtkAxesActor>::New())
     , m_orientationMarkerWidget(vtkSmartPointer<vtkOrientationMarkerWidget>::New())
 {
@@ -64,8 +102,33 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
 
     auto renderWindow = vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
     m_vtkWidget->setRenderWindow(renderWindow);
+    m_vtkWidget->interactor()->SetInteractorStyle(vtkSmartPointer<vtkInteractorStyleTrackballCamera>::New());
+    m_vtkWidget->installEventFilter(this);
+    m_vtkWidget->setMouseTracking(true);
     renderWindow->AddRenderer(m_renderer);
-    m_renderer->SetBackground(0.95, 0.95, 0.97);
+    m_renderer->SetBackground(0.12, 0.16, 0.22);
+
+    m_crosshairCursor->AllOff();
+    m_crosshairCursor->AxesOn();
+    m_crosshairCursor->XShadowsOn();
+    m_crosshairCursor->YShadowsOn();
+    m_crosshairCursor->ZShadowsOn();
+    m_crosshairCursor->WrapOff();
+    m_crosshairCursor->TranslationModeOff();
+
+    auto crosshairMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    crosshairMapper->SetInputConnection(m_crosshairCursor->GetOutputPort());
+    m_crosshairActor->SetMapper(crosshairMapper);
+    m_crosshairActor->GetProperty()->SetColor(0.95, 0.82, 0.15);
+    m_crosshairActor->GetProperty()->SetLineWidth(2.5f);
+    m_crosshairActor->GetProperty()->RenderLinesAsTubesOn();
+    m_crosshairActor->GetProperty()->LightingOff();
+    m_crosshairActor->PickableOff();
+    m_crosshairActor->SetVisibility(false);
+    m_renderer->AddActor(m_crosshairActor);
+
+    m_modelPicker->PickFromListOn();
+    m_modelPicker->SetTolerance(0.0005);
 
     // Follow the official VTK OrientationMarkerWidget pattern, but use vtkAxesActor
     // to get a Unity-like XYZ gizmo in the top-right corner.
@@ -100,9 +163,140 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
 
 void ModelViewWidget::clearScene(const QString &message)
 {
+    m_crosshairDragActive = false;
+    m_cursorWorldPosition = Axis { 0.0, 0.0, 0.0 };
+    m_modelActors.clear();
+    m_modelPicker->InitializePickList();
+    m_hasReferenceBounds = false;
+    m_hasModelBounds = false;
+    m_referenceBounds = BoundsArray { 0.0, -1.0, 0.0, -1.0, 0.0, -1.0 };
+    m_modelBounds = BoundsArray { 0.0, -1.0, 0.0, -1.0, 0.0, -1.0 };
+
     m_renderer->RemoveAllViewProps();
+    m_renderer->AddActor(m_crosshairActor);
+    m_crosshairActor->SetVisibility(false);
+
     m_statusLabel->setText(message);
     m_vtkWidget->renderWindow()->Render();
+}
+
+void ModelViewWidget::addModelData(const QString &filePath, vtkPolyData *polyData)
+{
+    if (polyData == nullptr || (polyData->GetNumberOfPoints() <= 0 && polyData->GetNumberOfCells() <= 0)) {
+        return;
+    }
+
+    const QFileInfo info(filePath);
+
+    auto mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    mapper->SetInputData(polyData);
+
+    auto actor = vtkSmartPointer<vtkActor>::New();
+    actor->SetMapper(mapper);
+    actor->GetProperty()->SetOpacity(1.0);
+
+    double polyBounds[6] { 0.0, -1.0, 0.0, -1.0, 0.0, -1.0 };
+    polyData->GetBounds(polyBounds);
+    m_hasModelBounds = mergeBounds(polyBounds, m_modelBounds.data(), m_hasModelBounds);
+
+    m_modelActors.push_back(actor);
+    m_renderer->AddActor(actor);
+    m_modelPicker->AddPickList(actor);
+
+    updateCrosshairGeometry();
+    resetCameraToAnatomicalView();
+    m_statusLabel->setText(QStringLiteral("已加载模型: %1").arg(info.fileName()));
+    m_vtkWidget->renderWindow()->Render();
+}
+
+void ModelViewWidget::setReferenceImageData(vtkImageData *imageData)
+{
+    m_hasReferenceBounds = false;
+    m_referenceBounds = BoundsArray { 0.0, -1.0, 0.0, -1.0, 0.0, -1.0 };
+
+    if (imageData != nullptr) {
+        double bounds[6] { 0.0, -1.0, 0.0, -1.0, 0.0, -1.0 };
+        imageData->GetBounds(bounds);
+        if (vtkMath::AreBoundsInitialized(bounds)) {
+            std::copy(bounds, bounds + 6, m_referenceBounds.begin());
+            m_hasReferenceBounds = true;
+        }
+    }
+
+    updateCrosshairGeometry();
+    m_vtkWidget->renderWindow()->Render();
+}
+
+void ModelViewWidget::setCrosshairEnabled(bool enabled)
+{
+    m_crosshairEnabled = enabled;
+    m_crosshairDragActive = false;
+    updateCrosshairGeometry();
+    m_vtkWidget->renderWindow()->Render();
+}
+
+void ModelViewWidget::setCursorWorldPosition(double x, double y, double z)
+{
+    setCursorWorldPositionInternal(Axis { x, y, z }, false);
+}
+
+std::array<double, 3> ModelViewWidget::cursorWorldPosition() const
+{
+    return m_cursorWorldPosition;
+}
+
+bool ModelViewWidget::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched != m_vtkWidget || !m_crosshairEnabled || m_modelActors.empty()) {
+        return QWidget::eventFilter(watched, event);
+    }
+
+    switch (event->type()) {
+    case QEvent::MouseButtonPress: {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() != Qt::LeftButton) {
+            break;
+        }
+
+        Axis worldPosition;
+        if (!pickWorldPosition(mouseEvent->pos(), &worldPosition)) {
+            break;
+        }
+
+        m_crosshairDragActive = true;
+        setCursorWorldPositionInternal(worldPosition, true);
+        return true;
+    }
+    case QEvent::MouseMove: {
+        if (!m_crosshairDragActive) {
+            break;
+        }
+
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if ((mouseEvent->buttons() & Qt::LeftButton) == 0) {
+            m_crosshairDragActive = false;
+            break;
+        }
+
+        Axis worldPosition;
+        if (pickWorldPosition(mouseEvent->pos(), &worldPosition)) {
+            setCursorWorldPositionInternal(worldPosition, true);
+        }
+        return true;
+    }
+    case QEvent::MouseButtonRelease: {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (m_crosshairDragActive && mouseEvent->button() == Qt::LeftButton) {
+            m_crosshairDragActive = false;
+            return true;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+
+    return QWidget::eventFilter(watched, event);
 }
 
 void ModelViewWidget::updateViewButtonText()
@@ -131,8 +325,7 @@ void ModelViewWidget::resetCameraToAnatomicalView()
 void ModelViewWidget::applyStandardView(StandardView view)
 {
     double bounds[6] { 0.0, -1.0, 0.0, -1.0, 0.0, -1.0 };
-    m_renderer->ComputeVisiblePropBounds(bounds);
-    if (!vtkMath::AreBoundsInitialized(bounds)) {
+    if (!cameraBounds(bounds)) {
         return;
     }
 
@@ -175,23 +368,80 @@ void ModelViewWidget::applyStandardView(StandardView view)
     m_vtkWidget->renderWindow()->Render();
 }
 
-void ModelViewWidget::addModelData(const QString &filePath, vtkPolyData *polyData)
+void ModelViewWidget::setCursorWorldPositionInternal(const Axis &worldPosition, bool emitSignal)
 {
-    if (polyData == nullptr || (polyData->GetNumberOfPoints() <= 0 && polyData->GetNumberOfCells() <= 0)) {
+    m_cursorWorldPosition = worldPosition;
+    updateCrosshairGeometry();
+    m_vtkWidget->renderWindow()->Render();
+
+    if (emitSignal) {
+        emit cursorWorldPositionChanged(m_cursorWorldPosition[0],
+                                        m_cursorWorldPosition[1],
+                                        m_cursorWorldPosition[2]);
+    }
+}
+
+void ModelViewWidget::updateCrosshairGeometry()
+{
+    double bounds[6] { 0.0, -1.0, 0.0, -1.0, 0.0, -1.0 };
+    if (!m_crosshairEnabled || !crosshairBounds(bounds)) {
+        m_crosshairActor->SetVisibility(false);
         return;
     }
 
-    const QFileInfo info(filePath);
+    m_crosshairCursor->SetModelBounds(bounds);
+    m_crosshairCursor->SetFocalPoint(m_cursorWorldPosition[0],
+                                     m_cursorWorldPosition[1],
+                                     m_cursorWorldPosition[2]);
+    m_crosshairCursor->Update();
+    m_crosshairActor->SetVisibility(true);
+}
 
-    vtkNew<vtkPolyDataMapper> mapper;
-    mapper->SetInputData(polyData);
+bool ModelViewWidget::pickWorldPosition(const QPoint &widgetPosition, Axis *worldPosition) const
+{
+    if (worldPosition == nullptr || m_modelActors.empty()) {
+        return false;
+    }
 
-    vtkNew<vtkActor> actor;
-    actor->SetMapper(mapper);
-    actor->GetProperty()->SetOpacity(1.0);
+    const double devicePixelRatio = m_vtkWidget->devicePixelRatioF();
+    const int displayX = static_cast<int>(std::lround(widgetPosition.x() * devicePixelRatio));
+    const int displayY = static_cast<int>(std::lround((m_vtkWidget->height() - 1 - widgetPosition.y()) * devicePixelRatio));
+    if (m_modelPicker->Pick(displayX, displayY, 0.0, m_renderer) == 0) {
+        return false;
+    }
 
-    m_renderer->AddActor(actor);
-    resetCameraToAnatomicalView();
-    m_statusLabel->setText(QStringLiteral("已加载模型: %1").arg(info.fileName()));
-    m_vtkWidget->renderWindow()->Render();
+    double pickedPosition[3] { 0.0, 0.0, 0.0 };
+    m_modelPicker->GetPickPosition(pickedPosition);
+    *worldPosition = Axis { pickedPosition[0], pickedPosition[1], pickedPosition[2] };
+    return true;
+}
+
+bool ModelViewWidget::crosshairBounds(double bounds[6]) const
+{
+    bool hasBounds = false;
+    hasBounds = m_hasModelBounds && mergeBounds(m_modelBounds.data(), bounds, hasBounds);
+    hasBounds = m_hasReferenceBounds && mergeBounds(m_referenceBounds.data(), bounds, hasBounds);
+
+    if (hasBounds) {
+        return true;
+    }
+
+    double visibleBounds[6] { 0.0, -1.0, 0.0, -1.0, 0.0, -1.0 };
+    m_renderer->ComputeVisiblePropBounds(visibleBounds);
+    return mergeBounds(visibleBounds, bounds, false);
+}
+
+bool ModelViewWidget::cameraBounds(double bounds[6]) const
+{
+    if (m_hasModelBounds && mergeBounds(m_modelBounds.data(), bounds, false)) {
+        return true;
+    }
+
+    if (m_hasReferenceBounds && mergeBounds(m_referenceBounds.data(), bounds, false)) {
+        return true;
+    }
+
+    double visibleBounds[6] { 0.0, -1.0, 0.0, -1.0, 0.0, -1.0 };
+    m_renderer->ComputeVisiblePropBounds(visibleBounds);
+    return mergeBounds(visibleBounds, bounds, false);
 }

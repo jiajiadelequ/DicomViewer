@@ -230,6 +230,7 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
     } else {
         m_hasDicomImage = false;
         setCrosshairEnabled(false);
+        m_imageData = nullptr;
         const QString dicomText = QStringLiteral("未发现 DICOM 序列");
         m_axialPanel->clearRecommendedWindowLevel();
         m_coronalPanel->clearRecommendedWindowLevel();
@@ -243,6 +244,7 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
     m_volumePanel->clearScene(result.models.empty()
                                   ? QStringLiteral("未发现模型文件")
                                   : QStringLiteral("已发现 %1 个模型文件").arg(static_cast<int>(result.models.size())));
+    m_volumePanel->setReferenceImageData(result.imageData);
     for (const LoadedModelData &model : result.models) {
         auto *item = new QListWidgetItem(model.filePath, m_objectList);
         item->setCheckState(Qt::Checked);
@@ -304,9 +306,10 @@ void FourPaneViewer::ensureContentPage()
     m_crosshairToggleButton->setChecked(false);
     m_crosshairToggleButton->setEnabled(false);
 
-    connect(m_axialPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncMprCursor);
-    connect(m_coronalPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncMprCursor);
-    connect(m_sagittalPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncMprCursor);
+    connect(m_axialPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
+    connect(m_coronalPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
+    connect(m_sagittalPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
+    connect(m_volumePanel, &ModelViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
     connect(m_crosshairToggleButton, &QPushButton::toggled, this, &FourPaneViewer::handleCrosshairToggle);
 
     auto *viewArea = new SplitterGridWidget(
@@ -379,6 +382,9 @@ void FourPaneViewer::setCrosshairEnabled(bool enabled)
     if (m_sagittalPanel != nullptr) {
         m_sagittalPanel->setCrosshairEnabled(actualEnabled);
     }
+    if (m_volumePanel != nullptr) {
+        m_volumePanel->setCrosshairEnabled(actualEnabled);
+    }
 }
 
 void FourPaneViewer::handleCrosshairToggle(bool checked)
@@ -389,22 +395,24 @@ void FourPaneViewer::handleCrosshairToggle(bool checked)
     }
 
     const auto initialCursor = m_axialPanel->cursorWorldPosition();
-    syncMprCursor(initialCursor[0], initialCursor[1], initialCursor[2]);
+    syncCrosshairPosition(initialCursor[0], initialCursor[1], initialCursor[2]);
 }
 
-void FourPaneViewer::syncMprCursor(double x, double y, double z)
+void FourPaneViewer::syncCrosshairPosition(double x, double y, double z)
 {
     if (!m_crosshairEnabled
-        || m_syncingMprCursor
+        || m_syncingCrosshair
         || m_axialPanel == nullptr
         || m_coronalPanel == nullptr
-        || m_sagittalPanel == nullptr) {
+        || m_sagittalPanel == nullptr
+        || m_volumePanel == nullptr) {
         return;
     }
 
-    m_syncingMprCursor = true;
+    m_syncingCrosshair = true;
     m_axialPanel->setCursorWorldPosition(x, y, z);
     m_coronalPanel->setCursorWorldPosition(x, y, z);
     m_sagittalPanel->setCursorWorldPosition(x, y, z);
-    m_syncingMprCursor = false;
+    m_volumePanel->setCursorWorldPosition(x, y, z);
+    m_syncingCrosshair = false;
 }
