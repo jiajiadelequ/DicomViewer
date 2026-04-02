@@ -4,6 +4,7 @@
 
 class QLabel;
 class QListWidget;
+class QListWidgetItem;
 class QPushButton;
 
 // 把对象列表、病例摘要和十字线开关收敛到一个侧栏部件里。
@@ -21,8 +22,11 @@ public:
 
 signals:
     void crosshairToggled(bool checked);
+    void objectVisibilityChanged(int index, bool visible);
 
 private:
+    void handleItemChanged(QListWidgetItem *item);
+
     QListWidget *m_objectList;
     QLabel *m_summaryLabel;
     QPushButton *m_crosshairToggleButton;

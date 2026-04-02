@@ -104,6 +104,7 @@ set(PROJECT_SOURCES
     mainwindow.cpp
     mainwindow.h
     src/model/studypackage.h
+    src/core/runtime/studyloadfeedback.h
     src/core/runtime/studyloadresult.h
     src/core/casepackagereader.h
     src/core/casepackagereader.cpp

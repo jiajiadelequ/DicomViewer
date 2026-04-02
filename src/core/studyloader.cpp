@@ -39,6 +39,25 @@ using VolumeConnectorType = itk::ImageToVTKImageFilter<VolumeImageType>;
 
 Q_LOGGING_CATEGORY(lcStudyLoadDiagnostics, "dicomviewer.studyloader.diagnostics", QtWarningMsg)
 
+bool isCancelled(const StudyLoadFeedback *feedback)
+{
+    return feedback != nullptr && feedback->isCancelled && feedback->isCancelled();
+}
+
+void reportProgress(const StudyLoadFeedback *feedback, const QString &message, int percent)
+{
+    if (feedback != nullptr && feedback->reportProgress) {
+        feedback->reportProgress(message, percent);
+    }
+}
+
+StudyLoadResult cancelledResult()
+{
+    StudyLoadResult result;
+    result.cancelled = true;
+    return result;
+}
+
 QString formatItkDirection(const VolumeImageType::DirectionType &direction)
 {
     return QStringLiteral("[[%1, %2, %3], [%4, %5, %6], [%7, %8, %9]]")
@@ -312,13 +331,21 @@ vtkSmartPointer<vtkPolyData> loadModelPolyData(const QString &filePath)
     return polyData;
 }
 
-void loadDicomData(const QString &dicomPath, StudyLoadResult *result)
+void loadDicomData(const QString &dicomPath, StudyLoadResult *result, const StudyLoadFeedback *feedback)
 {
     if (result == nullptr || dicomPath.isEmpty()) {
         return;
     }
 
     try {
+        if (isCancelled(feedback)) {
+            *result = cancelledResult();
+            return;
+        }
+
+        reportProgress(feedback,
+                       QStringLiteral("正在识别主 DICOM 序列...\n%1").arg(dicomPath),
+                       40);
         auto namesGenerator = VolumeNamesGeneratorType::New();
         namesGenerator->SetUseSeriesDetails(true);
         namesGenerator->SetDirectory(dicomPath.toStdString());
@@ -329,6 +356,14 @@ void loadDicomData(const QString &dicomPath, StudyLoadResult *result)
             return;
         }
 
+        if (isCancelled(feedback)) {
+            *result = cancelledResult();
+            return;
+        }
+
+        reportProgress(feedback,
+                       QStringLiteral("正在读取 DICOM 体数据...\n共 %1 个文件").arg(static_cast<int>(fileNames.size())),
+                       55);
         auto imageIO = VolumeImageIOType::New();
         auto reader = VolumeReaderType::New();
         reader->SetImageIO(imageIO);
@@ -336,6 +371,12 @@ void loadDicomData(const QString &dicomPath, StudyLoadResult *result)
         reader->ForceOrthogonalDirectionOff();
         reader->Update();
 
+        if (isCancelled(feedback)) {
+            *result = cancelledResult();
+            return;
+        }
+
+        reportProgress(feedback, QStringLiteral("正在转换 DICOM 数据到渲染格式..."), 70);
         auto connector = VolumeConnectorType::New();
         connector->SetInput(reader->GetOutput());
         connector->Update();
@@ -384,7 +425,7 @@ void loadDicomData(const QString &dicomPath, StudyLoadResult *result)
     }
 }
 
-void loadModelData(const QStringList &modelFiles, StudyLoadResult *result)
+void loadModelData(const QStringList &modelFiles, StudyLoadResult *result, const StudyLoadFeedback *feedback)
 {
     if (result == nullptr) {
         return;
@@ -392,9 +433,21 @@ void loadModelData(const QStringList &modelFiles, StudyLoadResult *result)
 
     result->models.clear();
     result->models.reserve(static_cast<std::size_t>(modelFiles.size()));
+    const int totalModels = std::max(1, modelFiles.size());
+    int modelIndex = 0;
     for (const QString &modelFile : modelFiles) {
+        if (isCancelled(feedback)) {
+            *result = cancelledResult();
+            return;
+        }
+
+        const int percent = 80 + static_cast<int>((15.0 * modelIndex) / totalModels);
+        reportProgress(feedback,
+                       QStringLiteral("正在读取模型文件...\n%1").arg(modelFile),
+                       percent);
         auto polyData = loadModelPolyData(modelFile);
         if (polyData == nullptr) {
+            ++modelIndex;
             continue;
         }
 
@@ -402,17 +455,24 @@ void loadModelData(const QStringList &modelFiles, StudyLoadResult *result)
         modelData.filePath = modelFile;
         modelData.polyData = polyData;
         result->models.push_back(modelData);
+        ++modelIndex;
     }
 }
 }
 
-StudyLoadResult StudyLoader::loadFromDirectory(const QString &rootPath)
+StudyLoadResult StudyLoader::loadFromDirectory(const QString &rootPath, const StudyLoadFeedback &feedback)
 {
     StudyLoadResult result;
+    reportProgress(&feedback,
+                   QStringLiteral("正在扫描病例目录结构...\n%1").arg(rootPath),
+                   0);
 
     try {
         CasePackageReader packageReader;
-        result.package = packageReader.readFromDirectory(rootPath, &result.errorMessage);
+        result.package = packageReader.readFromDirectory(rootPath, &result.errorMessage, &feedback);
+        if (isCancelled(&feedback)) {
+            return cancelledResult();
+        }
         if (!result.package.isValid()) {
             if (result.errorMessage.isEmpty()) {
                 result.errorMessage = QStringLiteral("病例包目录缺少可识别的数据。");
@@ -420,16 +480,22 @@ StudyLoadResult StudyLoader::loadFromDirectory(const QString &rootPath)
             return result;
         }
 
+        reportProgress(&feedback, QStringLiteral("已识别病例包结构，开始读取数据..."), 35);
+
         if (!result.package.dicomPath.isEmpty()) {
-            loadDicomData(result.package.dicomPath, &result);
-            if (!result.errorMessage.isEmpty()) {
+            loadDicomData(result.package.dicomPath, &result, &feedback);
+            if (result.cancelled || !result.errorMessage.isEmpty()) {
                 return result;
             }
         }
 
         if (!result.package.modelFiles.isEmpty()) {
-            loadModelData(result.package.modelFiles, &result);
+            loadModelData(result.package.modelFiles, &result, &feedback);
+            if (result.cancelled) {
+                return result;
+            }
         }
+        reportProgress(&feedback, QStringLiteral("病例加载完成。"), 100);
     } catch (const itk::ExceptionObject &ex) {
         result.errorMessage = QStringLiteral("ITK/GDCM 读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
     } catch (const gdcm::Exception &ex) {

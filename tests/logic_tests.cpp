@@ -89,7 +89,7 @@ void testCasePackageReaderWithModelAndMeta()
 
     CasePackageReader reader;
     QString errorMessage;
-    const StudyPackage package = reader.readFromDirectory(tempDir.path(), &errorMessage);
+    const StudyPackage package = reader.readFromDirectory(tempDir.path(), &errorMessage, nullptr);
 
     expect(errorMessage.isEmpty(), QStringLiteral("model/meta 场景不应产生错误信息。"));
     expect(package.isValid(), QStringLiteral("仅包含模型和场景文件的目录应被识别为有效病例包。"));
@@ -103,7 +103,9 @@ void testCasePackageReaderMissingDirectory()
 {
     CasePackageReader reader;
     QString errorMessage;
-    const StudyPackage package = reader.readFromDirectory(QStringLiteral("Z:/this/path/should/not/exist"), &errorMessage);
+    const StudyPackage package = reader.readFromDirectory(QStringLiteral("Z:/this/path/should/not/exist"),
+                                                          &errorMessage,
+                                                          nullptr);
 
     expect(!package.isValid(), QStringLiteral("不存在的目录不应返回有效病例包。"));
     expect(!errorMessage.isEmpty(), QStringLiteral("不存在的目录应返回错误信息。"));

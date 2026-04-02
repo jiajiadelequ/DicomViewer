@@ -17,6 +17,18 @@ namespace
 using DicomImageIOType = itk::GDCMImageIO;
 using DicomNamesGeneratorType = itk::GDCMSeriesFileNames;
 
+bool isCancelled(const StudyLoadFeedback *feedback)
+{
+    return feedback != nullptr && feedback->isCancelled && feedback->isCancelled();
+}
+
+void reportProgress(const StudyLoadFeedback *feedback, const QString &message, int percent)
+{
+    if (feedback != nullptr && feedback->reportProgress) {
+        feedback->reportProgress(message, percent);
+    }
+}
+
 struct DicomDirectoryMatch
 {
     QString directoryPath;
@@ -254,10 +266,12 @@ bool isBetterDicomMatch(const DicomDirectoryMatch &candidate, const DicomDirecto
     return QString::compare(candidate.directoryPath, currentBest.directoryPath, Qt::CaseInsensitive) < 0;
 }
 
-DicomDirectoryMatch inspectDicomDirectory(const QDir &rootDir, const QString &directoryPath)
+DicomDirectoryMatch inspectDicomDirectory(const QDir &rootDir,
+                                         const QString &directoryPath,
+                                         const StudyLoadFeedback *feedback)
 {
     DicomDirectoryMatch candidate;
-    if (directoryPath.isEmpty() || !directoryLooksLikeDicom(directoryPath)) {
+    if (directoryPath.isEmpty() || isCancelled(feedback) || !directoryLooksLikeDicom(directoryPath)) {
         return candidate;
     }
 
@@ -274,31 +288,49 @@ DicomDirectoryMatch inspectDicomDirectory(const QDir &rootDir, const QString &di
     return candidate;
 }
 
-DicomDirectoryMatch resolveDicomDirectory(const QDir &rootDir)
+DicomDirectoryMatch resolveDicomDirectory(const QDir &rootDir, const StudyLoadFeedback *feedback)
 {
     DicomDirectoryMatch bestMatch;
     const QString rootPath = QDir::toNativeSeparators(rootDir.absolutePath());
     const QString preferredPath = findChildDirectory(rootDir, {QStringLiteral("dicom"), QStringLiteral("dicoms")});
 
+    reportProgress(feedback, QStringLiteral("正在扫描病例目录中的 DICOM 序列..."), 10);
+
     if (!preferredPath.isEmpty()) {
-        const DicomDirectoryMatch preferredMatch = inspectDicomDirectory(rootDir, preferredPath);
-        if (preferredMatch.isValid()) {
+        const DicomDirectoryMatch preferredMatch = inspectDicomDirectory(rootDir, preferredPath, feedback);
+        if (preferredMatch.isValid() || isCancelled(feedback)) {
             return preferredMatch;
         }
     }
 
-    const DicomDirectoryMatch rootMatch = inspectDicomDirectory(rootDir, rootPath);
+    const DicomDirectoryMatch rootMatch = inspectDicomDirectory(rootDir, rootPath, feedback);
+    if (rootMatch.isValid() || isCancelled(feedback)) {
+        return rootMatch;
+    }
     if (rootMatch.isValid()) {
         bestMatch = rootMatch;
     }
 
-    for (const QString &directoryPath : candidateDirectories(rootDir)) {
+    const QStringList directories = candidateDirectories(rootDir);
+    const int totalCandidates = std::max(1, directories.size());
+    int scannedCandidateCount = 0;
+    for (const QString &directoryPath : directories) {
         if (sameDirectoryPath(directoryPath, rootPath)
             || (!preferredPath.isEmpty() && sameDirectoryPath(directoryPath, preferredPath))) {
             continue;
         }
 
-        const DicomDirectoryMatch candidate = inspectDicomDirectory(rootDir, directoryPath);
+        if (isCancelled(feedback)) {
+            return {};
+        }
+
+        ++scannedCandidateCount;
+        const int percent = 10 + static_cast<int>((25.0 * scannedCandidateCount) / totalCandidates);
+        reportProgress(feedback,
+                       QStringLiteral("正在扫描 DICOM 候选目录...\n%1").arg(directoryPath),
+                       percent);
+
+        const DicomDirectoryMatch candidate = inspectDicomDirectory(rootDir, directoryPath, feedback);
         if (isBetterDicomMatch(candidate, bestMatch)) {
             bestMatch = candidate;
         }
@@ -308,7 +340,9 @@ DicomDirectoryMatch resolveDicomDirectory(const QDir &rootDir)
 }
 }
 
-StudyPackage CasePackageReader::readFromDirectory(const QString &rootPath, QString *errorMessage) const
+StudyPackage CasePackageReader::readFromDirectory(const QString &rootPath,
+                                                  QString *errorMessage,
+                                                  const StudyLoadFeedback *feedback) const
 {
     StudyPackage package;
 
@@ -323,7 +357,12 @@ StudyPackage CasePackageReader::readFromDirectory(const QString &rootPath, QStri
     package.rootPath = QDir::toNativeSeparators(rootInfo.absoluteFilePath());
 
     const QDir rootDir(rootInfo.absoluteFilePath());
-    const DicomDirectoryMatch dicomMatch = resolveDicomDirectory(rootDir);
+    const DicomDirectoryMatch dicomMatch = resolveDicomDirectory(rootDir, feedback);
+    if (isCancelled(feedback)) {
+        return package;
+    }
+
+    reportProgress(feedback, QStringLiteral("正在整理病例目录中的模型和场景文件..."), 35);
     const QString modelPath = findChildDirectory(rootDir, {QStringLiteral("model"), QStringLiteral("models")});
     const QString metaPath = findChildDirectory(rootDir, {QStringLiteral("meta")});
     const QString sceneFilePath = QDir(metaPath).filePath(QStringLiteral("scene.json"));

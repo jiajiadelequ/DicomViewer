@@ -3,6 +3,9 @@
 #include "src/core/runtime/studyloadresult.h"
 #include "src/model/studypackage.h"
 
+#include <atomic>
+#include <memory>
+
 #include <QMainWindow>
 
 template <typename T>
@@ -12,6 +15,8 @@ class QAction;
 class QDialog;
 class FourPaneViewer;
 class QLabel;
+class QProgressBar;
+class QPushButton;
 
 class MainWindow final : public QMainWindow
 {
@@ -24,10 +29,12 @@ public:
 private slots:
     void openStudyPackage();
     void handleStudyLoadFinished();
+    void cancelStudyLoad();
 
 private:
     void beginStudyLoad(const QString &rootPath);
     void ensureLoadingDialog();
+    void updateLoadingProgress(const QString &message, int percent);
     void createMenus();
     void updateStatusBar(const StudyPackage &package);
     void showPackageError(const QString &message);
@@ -38,4 +45,9 @@ private:
     QFutureWatcher<StudyLoadResult> *m_loadWatcher;
     QDialog *m_loadingDialog;
     QLabel *m_loadingMessageLabel;
+    QProgressBar *m_loadingProgressBar;
+    QPushButton *m_loadingCancelButton;
+    StudyPackage m_currentPackage;
+    std::shared_ptr<std::atomic_bool> m_loadCancelFlag;
+    int m_activeLoadId = 0;
 };

@@ -107,6 +107,21 @@ void ModelViewCrosshairController::addModelActor(vtkSmartPointer<vtkActor> actor
     m_modelPicker->AddPickList(actor);
 }
 
+void ModelViewCrosshairController::setModelVisibility(int index, bool visible)
+{
+    if (index < 0 || index >= static_cast<int>(m_modelActors.size())) {
+        return;
+    }
+
+    auto &actor = m_modelActors[static_cast<std::size_t>(index)];
+    if (actor == nullptr) {
+        return;
+    }
+
+    actor->SetVisibility(visible);
+    actor->SetPickable(visible);
+}
+
 void ModelViewCrosshairController::setReferenceImageData(vtkImageData *imageData)
 {
     m_hasReferenceBounds = false;

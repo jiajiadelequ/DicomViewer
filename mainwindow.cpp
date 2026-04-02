@@ -13,6 +13,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QProgressBar>
 #include <QStatusBar>
 #include <QStringList>
@@ -33,6 +34,8 @@ MainWindow::MainWindow(QWidget *parent)
     , m_loadWatcher(new QFutureWatcher<StudyLoadResult>(this))
     , m_loadingDialog(nullptr)
     , m_loadingMessageLabel(nullptr)
+    , m_loadingProgressBar(nullptr)
+    , m_loadingCancelButton(nullptr)
 {
     setCentralWidget(m_viewer);
     createMenus();
@@ -71,33 +74,76 @@ void MainWindow::handleStudyLoadFinished()
     }
 
     const StudyLoadResult result = m_loadWatcher->result();
+    m_loadCancelFlag.reset();
+    if (result.cancelled) {
+        if (!m_currentPackage.isValid()) {
+            m_viewer->showEmptyState();
+            updateStatusBar(StudyPackage {});
+        }
+        statusBar()->showMessage(QStringLiteral("病例加载已取消。"), 3000);
+        return;
+    }
+
     QString errorMessage = result.errorMessage;
     if (!result.succeeded() || !m_viewer->applyStudyLoadResult(result, &errorMessage)) {
-        m_viewer->showErrorState(errorMessage);
-        updateStatusBar(StudyPackage{});
+        if (!m_currentPackage.isValid()) {
+            m_viewer->showErrorState(errorMessage);
+            updateStatusBar(StudyPackage {});
+        }
         showPackageError(errorMessage);
         return;
     }
 
+    m_currentPackage = result.package;
     updateStatusBar(result.package);
 }
 
 void MainWindow::beginStudyLoad(const QString &rootPath)
 {
     ensureLoadingDialog();
+    ++m_activeLoadId;
+    m_loadCancelFlag = std::make_shared<std::atomic_bool>(false);
 
     if (m_openAction != nullptr) {
         m_openAction->setEnabled(false);
     }
 
-    m_viewer->showLoadingState(QStringLiteral("正在后台扫描目录并读取 DICOM/模型..."));
-    m_loadingMessageLabel->setText(QStringLiteral("正在扫描病例目录并读取影像、模型数据...\n%1").arg(rootPath));
+    if (!m_currentPackage.isValid()) {
+        m_viewer->showLoadingState(QStringLiteral("正在后台扫描目录并读取 DICOM/模型..."));
+    }
+
+    updateLoadingProgress(QStringLiteral("正在准备加载病例目录...\n%1").arg(rootPath), 0);
+    m_loadingCancelButton->setEnabled(true);
+    m_loadingCancelButton->setText(QStringLiteral("取消"));
     m_loadingDialog->show();
     m_loadingDialog->raise();
     m_loadingDialog->activateWindow();
 
-    m_loadWatcher->setFuture(QtConcurrent::run([rootPath]() {
-        return StudyLoader::loadFromDirectory(rootPath);
+    const int loadId = m_activeLoadId;
+    const std::shared_ptr<std::atomic_bool> cancelFlag = m_loadCancelFlag;
+    StudyLoadFeedback feedback;
+    feedback.isCancelled = [cancelFlag]() {
+        return cancelFlag != nullptr && cancelFlag->load();
+    };
+    feedback.reportProgress = [this, loadId](const QString &message, int percent) {
+        auto *appObject = qApp;
+        if (appObject == nullptr) {
+            return;
+        }
+
+        QMetaObject::invokeMethod(appObject,
+                                  [this, loadId, message, percent]() {
+                                      if (loadId != m_activeLoadId) {
+                                          return;
+                                      }
+
+                                      updateLoadingProgress(message, percent);
+                                  },
+                                  Qt::QueuedConnection);
+    };
+
+    m_loadWatcher->setFuture(QtConcurrent::run([rootPath, feedback]() {
+        return StudyLoader::loadFromDirectory(rootPath, feedback);
     }));
 }
 
@@ -123,13 +169,41 @@ void MainWindow::ensureLoadingDialog()
     m_loadingMessageLabel = new QLabel(QStringLiteral("正在扫描病例目录并读取影像、模型数据..."), m_loadingDialog);
     m_loadingMessageLabel->setWordWrap(true);
 
-    auto *progressBar = new QProgressBar(m_loadingDialog);
-    progressBar->setTextVisible(false);
-    progressBar->setRange(0, 0);
+    m_loadingProgressBar = new QProgressBar(m_loadingDialog);
+    m_loadingProgressBar->setTextVisible(true);
+    m_loadingProgressBar->setRange(0, 100);
+
+    m_loadingCancelButton = new QPushButton(QStringLiteral("取消"), m_loadingDialog);
+    connect(m_loadingCancelButton, &QPushButton::clicked, this, &MainWindow::cancelStudyLoad);
 
     layout->addWidget(titleLabel);
     layout->addWidget(m_loadingMessageLabel);
-    layout->addWidget(progressBar);
+    layout->addWidget(m_loadingProgressBar);
+    layout->addWidget(m_loadingCancelButton);
+}
+
+void MainWindow::cancelStudyLoad()
+{
+    if (m_loadWatcher == nullptr || !m_loadWatcher->isRunning() || m_loadCancelFlag == nullptr) {
+        return;
+    }
+
+    m_loadCancelFlag->store(true);
+    m_loadingCancelButton->setEnabled(false);
+    m_loadingCancelButton->setText(QStringLiteral("正在取消..."));
+    if (m_loadingMessageLabel != nullptr) {
+        m_loadingMessageLabel->setText(QStringLiteral("正在取消当前加载任务，请稍候..."));
+    }
+}
+
+void MainWindow::updateLoadingProgress(const QString &message, int percent)
+{
+    if (m_loadingMessageLabel != nullptr) {
+        m_loadingMessageLabel->setText(message);
+    }
+    if (m_loadingProgressBar != nullptr) {
+        m_loadingProgressBar->setValue(qBound(0, percent, 100));
+    }
 }
 
 void MainWindow::createMenus()

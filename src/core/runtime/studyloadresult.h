@@ -29,9 +29,10 @@ struct StudyLoadResult
     WindowLevelPresetData windowLevelPreset;
     std::vector<LoadedModelData> models;
     QString errorMessage;
+    bool cancelled = false;
 
     [[nodiscard]] bool succeeded() const
     {
-        return errorMessage.isEmpty() && package.isValid();
+        return !cancelled && errorMessage.isEmpty() && package.isValid();
     }
 };

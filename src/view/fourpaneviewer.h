@@ -26,6 +26,7 @@ private:
     void ensureContentPage();
     void setCrosshairEnabled(bool enabled);
     void handleCrosshairToggle(bool checked);
+    void handleObjectVisibilityChanged(int index, bool visible);
     void syncCrosshairPosition(double x, double y, double z);
     void syncWindowLevel(double window, double level);
 

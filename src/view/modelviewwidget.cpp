@@ -108,6 +108,13 @@ void ModelViewWidget::addModelData(const QString &filePath, vtkPolyData *polyDat
     queueSceneUpdate(true);
 }
 
+void ModelViewWidget::setModelVisibility(int index, bool visible)
+{
+    m_crosshairController->setModelVisibility(index, visible);
+    m_crosshairController->updateGeometry();
+    queueSceneUpdate(false);
+}
+
 void ModelViewWidget::setReferenceImageData(vtkImageData *imageData)
 {
     m_crosshairController->setReferenceImageData(imageData);

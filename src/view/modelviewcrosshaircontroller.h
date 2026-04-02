@@ -24,6 +24,7 @@ public:
 
     void clearScene();
     void addModelActor(vtkSmartPointer<vtkActor> actor, vtkPolyData *polyData);
+    void setModelVisibility(int index, bool visible);
     void setReferenceImageData(vtkImageData *imageData);
     void setEnabled(bool enabled);
     void setCursorWorldPosition(const Axis &worldPosition);

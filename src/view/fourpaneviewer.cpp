@@ -165,6 +165,10 @@ void FourPaneViewer::ensureContentPage()
             &SceneSidebarWidget::crosshairToggled,
             this,
             &FourPaneViewer::handleCrosshairToggle);
+    connect(m_contentPage->sidebarPanel(),
+            &SceneSidebarWidget::objectVisibilityChanged,
+            this,
+            &FourPaneViewer::handleObjectVisibilityChanged);
 
     m_rootLayout->addWidget(m_contentPage);
 }
@@ -197,6 +201,15 @@ void FourPaneViewer::handleCrosshairToggle(bool checked)
 
     const auto initialCursor = m_contentPage->axialPanel()->cursorWorldPosition();
     syncCrosshairPosition(initialCursor[0], initialCursor[1], initialCursor[2]);
+}
+
+void FourPaneViewer::handleObjectVisibilityChanged(int index, bool visible)
+{
+    if (m_contentPage == nullptr) {
+        return;
+    }
+
+    m_contentPage->volumePanel()->setModelVisibility(index, visible);
 }
 
 void FourPaneViewer::syncCrosshairPosition(double x, double y, double z)

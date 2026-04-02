@@ -31,6 +31,7 @@ public:
     void endSceneBatch(const QString &message);
     void clearScene(const QString &message);
     void addModelData(const QString &filePath, vtkPolyData *polyData);
+    void setModelVisibility(int index, bool visible);
     void setReferenceImageData(vtkImageData *imageData);
     void setCrosshairEnabled(bool enabled);
     void setCursorWorldPosition(double x, double y, double z);

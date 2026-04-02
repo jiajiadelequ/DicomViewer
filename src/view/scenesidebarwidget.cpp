@@ -2,6 +2,7 @@
 
 #include <QLabel>
 #include <QListWidget>
+#include <QListWidgetItem>
 #include <QPushButton>
 #include <QVBoxLayout>
 
@@ -30,6 +31,7 @@ SceneSidebarWidget::SceneSidebarWidget(QWidget *parent)
     layout->addWidget(m_summaryLabel);
 
     connect(m_crosshairToggleButton, &QPushButton::toggled, this, &SceneSidebarWidget::crosshairToggled);
+    connect(m_objectList, &QListWidget::itemChanged, this, &SceneSidebarWidget::handleItemChanged);
 }
 
 void SceneSidebarWidget::clearObjects()
@@ -39,7 +41,11 @@ void SceneSidebarWidget::clearObjects()
 
 void SceneSidebarWidget::addObject(const QString &filePath)
 {
-    m_objectList->addItem(filePath);
+    m_objectList->blockSignals(true);
+    auto *item = new QListWidgetItem(filePath, m_objectList);
+    item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+    item->setCheckState(Qt::Checked);
+    m_objectList->blockSignals(false);
 }
 
 void SceneSidebarWidget::setSummaryText(const QString &text)
@@ -56,4 +62,13 @@ void SceneSidebarWidget::setCrosshairState(bool available, bool enabled)
                                          ? QStringLiteral("十字线定位: 开")
                                          : QStringLiteral("十字线定位: 关"));
     m_crosshairToggleButton->blockSignals(false);
+}
+
+void SceneSidebarWidget::handleItemChanged(QListWidgetItem *item)
+{
+    if (item == nullptr) {
+        return;
+    }
+
+    emit objectVisibilityChanged(m_objectList->row(item), item->checkState() == Qt::Checked);
 }
