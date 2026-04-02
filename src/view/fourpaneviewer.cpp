@@ -309,6 +309,9 @@ void FourPaneViewer::ensureContentPage()
     connect(m_axialPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
     connect(m_coronalPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
     connect(m_sagittalPanel, &MprViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
+    connect(m_axialPanel, &MprViewWidget::windowLevelChanged, this, &FourPaneViewer::syncWindowLevel);
+    connect(m_coronalPanel, &MprViewWidget::windowLevelChanged, this, &FourPaneViewer::syncWindowLevel);
+    connect(m_sagittalPanel, &MprViewWidget::windowLevelChanged, this, &FourPaneViewer::syncWindowLevel);
     connect(m_volumePanel, &ModelViewWidget::cursorWorldPositionChanged, this, &FourPaneViewer::syncCrosshairPosition);
     connect(m_crosshairToggleButton, &QPushButton::toggled, this, &FourPaneViewer::handleCrosshairToggle);
 
@@ -415,4 +418,20 @@ void FourPaneViewer::syncCrosshairPosition(double x, double y, double z)
     m_sagittalPanel->setCursorWorldPosition(x, y, z);
     m_volumePanel->setCursorWorldPosition(x, y, z);
     m_syncingCrosshair = false;
+}
+
+void FourPaneViewer::syncWindowLevel(double window, double level)
+{
+    if (m_syncingWindowLevel
+        || m_axialPanel == nullptr
+        || m_coronalPanel == nullptr
+        || m_sagittalPanel == nullptr) {
+        return;
+    }
+
+    m_syncingWindowLevel = true;
+    m_axialPanel->setWindowLevel(window, level);
+    m_coronalPanel->setWindowLevel(window, level);
+    m_sagittalPanel->setWindowLevel(window, level);
+    m_syncingWindowLevel = false;
 }

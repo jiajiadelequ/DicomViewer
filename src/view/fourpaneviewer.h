@@ -32,6 +32,7 @@ private:
     void setCrosshairEnabled(bool enabled);
     void handleCrosshairToggle(bool checked);
     void syncCrosshairPosition(double x, double y, double z);
+    void syncWindowLevel(double window, double level);
 
     QStackedLayout *m_rootLayout;
     QWidget *m_statePage;
@@ -50,4 +51,5 @@ private:
     bool m_hasDicomImage = false;
     bool m_crosshairEnabled = false;
     bool m_syncingCrosshair = false;
+    bool m_syncingWindowLevel = false;
 };

@@ -1,13 +1,13 @@
 #pragma once
 
 #include <array>
+#include <QPoint>
 #include <QWidget>
 
 #include <vtkSmartPointer.h>
 
 class QLabel;
 class QObject;
-class QPoint;
 class QEvent;
 class QResizeEvent;
 class QSlider;
@@ -41,12 +41,14 @@ public:
     void setImageData(vtkImageData *imageData);
     void setCrosshairEnabled(bool enabled);
     void setCursorWorldPosition(double x, double y, double z);
+    void setWindowLevel(double window, double level);
     [[nodiscard]] std::array<double, 3> cursorWorldPosition() const;
     void refreshView();
     void clearView(const QString &message);
 
 signals:
     void cursorWorldPositionChanged(double x, double y, double z);
+    void windowLevelChanged(double window, double level);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -83,12 +85,17 @@ private:
     void updateSliceControls();
     void updateSliceLabel(int sliderValue);
     void updateWindowLevel(vtkImageData *imageData);
+    void applyWindowLevelValues();
+    void updateWindowLevelOverlay();
+    void updateOverlayPosition();
+    void setWindowLevelInternal(double window, double level, bool emitSignal);
     [[nodiscard]] std::array<double, 3> sliceOriginForSliderValue(int sliderValue) const;
     [[nodiscard]] int sliderValueForWorldPosition(const std::array<double, 3> &worldPosition) const;
     [[nodiscard]] bool pickWorldPosition(const QPoint &widgetPosition, std::array<double, 3> *worldPosition) const;
 
     Orientation m_orientation;
     QLabel *m_titleLabel;
+    QLabel *m_windowLevelLabel;
     QLabel *m_sliceLabel;
     QSlider *m_slider;
     QVTKOpenGLNativeWidget *m_vtkWidget;
@@ -103,10 +110,16 @@ private:
     vtkSmartPointer<vtkImageData> m_imageData;
     SliceGeometry m_sliceGeometry;
     std::array<double, 3> m_cursorWorldPosition { 0.0, 0.0, 0.0 };
+    QPoint m_windowLevelDragStartPosition;
     double m_recommendedWindow = 0.0;
     double m_recommendedLevel = 0.0;
+    double m_currentWindow = 0.0;
+    double m_currentLevel = 0.0;
+    double m_windowLevelDragStartWindow = 0.0;
+    double m_windowLevelDragStartLevel = 0.0;
     bool m_hasRecommendedWindowLevel = false;
     bool m_hasImage = false;
     bool m_crosshairEnabled = false;
     bool m_crosshairDragActive = false;
+    bool m_windowLevelDragActive = false;
 };

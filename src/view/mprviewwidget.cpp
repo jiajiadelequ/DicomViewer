@@ -222,6 +222,7 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     : QWidget(parent)
     , m_orientation(orientation)
     , m_titleLabel(new QLabel(title, this))
+    , m_windowLevelLabel(new QLabel(this))
     , m_sliceLabel(new QLabel(QStringLiteral("未加载"), this))
     , m_slider(new QSlider(Qt::Horizontal, this))
     , m_vtkWidget(new QVTKOpenGLNativeWidget(this))
@@ -245,9 +246,23 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
 
     auto renderWindow = vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
     m_vtkWidget->setRenderWindow(renderWindow);
-    m_vtkWidget->interactor()->SetInteractorStyle(vtkSmartPointer<vtkInteractorStyleImage>::New());
+    auto imageStyle = vtkSmartPointer<vtkInteractorStyleImage>::New();
+    imageStyle->SetInteractionModeToImage2D();
+    m_vtkWidget->interactor()->SetInteractorStyle(imageStyle);
     m_vtkWidget->installEventFilter(this);
     m_vtkWidget->setMouseTracking(true);
+
+    m_windowLevelLabel->setParent(m_vtkWidget);
+    m_windowLevelLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_windowLevelLabel->setStyleSheet(QStringLiteral(
+        "padding: 4px 8px;"
+        "border-radius: 4px;"
+        "background-color: rgba(10, 12, 16, 180);"
+        "color: #f3f4f6;"
+        "font-size: 10pt;"
+        "font-weight: 600;"));
+    m_windowLevelLabel->setText(QStringLiteral("WW: -, WL: -"));
+    m_windowLevelLabel->hide();
 
     m_reslice->SetOutputDimensionality(2);
     m_reslice->SetInterpolationModeToLinear();
@@ -293,6 +308,7 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     layout->addWidget(m_slider);
 
     connect(m_slider, &QSlider::valueChanged, this, &MprViewWidget::onSliceChanged);
+    updateOverlayPosition();
 }
 
 void MprViewWidget::setRecommendedWindowLevel(double window, double level)
@@ -305,6 +321,11 @@ void MprViewWidget::setRecommendedWindowLevel(double window, double level)
     m_recommendedWindow = window;
     m_recommendedLevel = level;
     m_hasRecommendedWindowLevel = true;
+}
+
+void MprViewWidget::setWindowLevel(double window, double level)
+{
+    setWindowLevelInternal(window, level, false);
 }
 
 void MprViewWidget::clearRecommendedWindowLevel()
@@ -333,6 +354,7 @@ void MprViewWidget::setImageData(vtkImageData *imageData)
 
     m_cursorWorldPosition = m_sliceGeometry.center;
     updateWindowLevel(m_imageData);
+    applyWindowLevelValues();
     m_imageActor->SetVisibility(true);
     m_crosshairActor->SetVisibility(m_crosshairEnabled);
     updateSliceControls();
@@ -371,6 +393,9 @@ void MprViewWidget::clearView(const QString &message)
     m_crosshairDragActive = false;
     m_sliceGeometry = SliceGeometry {};
     m_cursorWorldPosition = Axis { 0.0, 0.0, 0.0 };
+    m_currentWindow = 0.0;
+    m_currentLevel = 0.0;
+    m_windowLevelDragActive = false;
 
     m_slider->blockSignals(true);
     m_slider->setEnabled(false);
@@ -382,12 +407,13 @@ void MprViewWidget::clearView(const QString &message)
     m_reslice->SetInputData(static_cast<vtkImageData *>(nullptr));
     m_imageActor->SetVisibility(false);
     m_crosshairActor->SetVisibility(false);
+    updateWindowLevelOverlay();
     m_vtkWidget->renderWindow()->Render();
 }
 
 bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched != m_vtkWidget || !m_hasImage || !m_crosshairEnabled) {
+    if (watched != m_vtkWidget || !m_hasImage) {
         return QWidget::eventFilter(watched, event);
     }
 
@@ -398,36 +424,70 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
             break;
         }
 
-        Axis worldPosition;
-        if (!pickWorldPosition(mouseEvent->pos(), &worldPosition)) {
-            break;
+        if (m_crosshairEnabled && mouseEvent->modifiers() == Qt::NoModifier) {
+            Axis worldPosition;
+            if (!pickWorldPosition(mouseEvent->pos(), &worldPosition)) {
+                break;
+            }
+
+            m_crosshairDragActive = true;
+            setCursorWorldPositionInternal(worldPosition, true, false);
+            return true;
         }
 
-        m_crosshairDragActive = true;
-        setCursorWorldPositionInternal(worldPosition, true, false);
-        return true;
+        if (!m_crosshairEnabled && mouseEvent->modifiers() == Qt::NoModifier) {
+            m_windowLevelDragActive = true;
+            m_windowLevelDragStartPosition = mouseEvent->pos();
+            m_windowLevelDragStartWindow = m_currentWindow;
+            m_windowLevelDragStartLevel = m_currentLevel;
+            return true;
+        }
+        break;
     }
     case QEvent::MouseMove: {
-        if (!m_crosshairDragActive) {
-            break;
-        }
-
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
-        if ((mouseEvent->buttons() & Qt::LeftButton) == 0) {
-            m_crosshairDragActive = false;
-            break;
+
+        if (m_crosshairDragActive) {
+            if ((mouseEvent->buttons() & Qt::LeftButton) == 0) {
+                m_crosshairDragActive = false;
+                break;
+            }
+
+            Axis worldPosition;
+            if (pickWorldPosition(mouseEvent->pos(), &worldPosition)) {
+                setCursorWorldPositionInternal(worldPosition, true, false);
+            }
+            return true;
         }
 
-        Axis worldPosition;
-        if (pickWorldPosition(mouseEvent->pos(), &worldPosition)) {
-            setCursorWorldPositionInternal(worldPosition, true, false);
+        if (m_windowLevelDragActive) {
+            if ((mouseEvent->buttons() & Qt::LeftButton) == 0) {
+                m_windowLevelDragActive = false;
+                break;
+            }
+
+            const double widthScale = std::max(1.0, m_windowLevelDragStartWindow);
+            const double levelScale = std::max(1.0, m_windowLevelDragStartWindow);
+            const double deltaX = static_cast<double>(mouseEvent->pos().x() - m_windowLevelDragStartPosition.x());
+            const double deltaY = static_cast<double>(mouseEvent->pos().y() - m_windowLevelDragStartPosition.y());
+            const double normalizedX = deltaX / std::max(1, m_vtkWidget->width());
+            const double normalizedY = deltaY / std::max(1, m_vtkWidget->height());
+
+            const double window = std::max(1.0, m_windowLevelDragStartWindow + normalizedX * widthScale * 4.0);
+            const double level = m_windowLevelDragStartLevel - normalizedY * levelScale * 4.0;
+            setWindowLevelInternal(window, level, true);
+            return true;
         }
-        return true;
+        break;
     }
     case QEvent::MouseButtonRelease: {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
         if (m_crosshairDragActive && mouseEvent->button() == Qt::LeftButton) {
             m_crosshairDragActive = false;
+            return true;
+        }
+        if (m_windowLevelDragActive && mouseEvent->button() == Qt::LeftButton) {
+            m_windowLevelDragActive = false;
             return true;
         }
         break;
@@ -442,6 +502,7 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
 void MprViewWidget::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
+    updateOverlayPosition();
 
     if (!m_hasImage) {
         return;
@@ -563,6 +624,7 @@ void MprViewWidget::renderCurrentState(bool fitViewport)
 
     m_crosshairActor->SetVisibility(m_crosshairEnabled);
     updateWindowLevel(m_imageData);
+    applyWindowLevelValues();
     applyCurrentSlice(m_slider->value());
     updateCrosshairGeometry();
 
@@ -681,19 +743,73 @@ void MprViewWidget::updateSliceLabel(int sliderValue)
 
 void MprViewWidget::updateWindowLevel(vtkImageData *imageData)
 {
-    if (m_hasRecommendedWindowLevel) {
-        m_windowLevel->SetWindow(m_recommendedWindow);
-        m_windowLevel->SetLevel(m_recommendedLevel);
+    if (m_currentWindow > 0.0 && std::isfinite(m_currentLevel)) {
+        return;
+    }
+
+    if (m_hasRecommendedWindowLevel && m_recommendedWindow > 0.0) {
+        m_currentWindow = m_recommendedWindow;
+        m_currentLevel = m_recommendedLevel;
         return;
     }
 
     double scalarRange[2] { 0.0, 0.0 };
     imageData->GetScalarRange(scalarRange);
-    const double window = std::max(1.0, scalarRange[1] - scalarRange[0]);
-    const double level = 0.5 * (scalarRange[0] + scalarRange[1]);
+    m_currentWindow = std::max(1.0, scalarRange[1] - scalarRange[0]);
+    m_currentLevel = 0.5 * (scalarRange[0] + scalarRange[1]);
+}
 
-    m_windowLevel->SetWindow(window);
-    m_windowLevel->SetLevel(level);
+void MprViewWidget::applyWindowLevelValues()
+{
+    const double clampedWindow = std::max(1.0, m_currentWindow);
+    m_currentWindow = clampedWindow;
+    m_windowLevel->SetWindow(clampedWindow);
+    m_windowLevel->SetLevel(m_currentLevel);
+    updateWindowLevelOverlay();
+}
+
+void MprViewWidget::updateWindowLevelOverlay()
+{
+    if (!m_hasImage || m_currentWindow <= 0.0) {
+        m_windowLevelLabel->hide();
+        return;
+    }
+
+    m_windowLevelLabel->setText(QStringLiteral("WW: %1  WL: %2")
+                                    .arg(static_cast<int>(std::lround(m_currentWindow)))
+                                    .arg(static_cast<int>(std::lround(m_currentLevel))));
+    m_windowLevelLabel->adjustSize();
+    updateOverlayPosition();
+    m_windowLevelLabel->show();
+    m_windowLevelLabel->raise();
+}
+
+void MprViewWidget::updateOverlayPosition()
+{
+    if (m_windowLevelLabel == nullptr || m_vtkWidget == nullptr) {
+        return;
+    }
+
+    const int margin = 8;
+    const QSize labelSize = m_windowLevelLabel->sizeHint();
+    const int x = std::max(margin, m_vtkWidget->width() - labelSize.width() - margin);
+    m_windowLevelLabel->move(x, margin);
+}
+
+void MprViewWidget::setWindowLevelInternal(double window, double level, bool emitSignal)
+{
+    if (!std::isfinite(window) || !std::isfinite(level)) {
+        return;
+    }
+
+    m_currentWindow = std::max(1.0, window);
+    m_currentLevel = level;
+    applyWindowLevelValues();
+    m_vtkWidget->renderWindow()->Render();
+
+    if (emitSignal) {
+        emit windowLevelChanged(m_currentWindow, m_currentLevel);
+    }
 }
 
 std::array<double, 3> MprViewWidget::sliceOriginForSliderValue(int sliderValue) const
