@@ -27,6 +27,8 @@ class ModelViewWidget final : public QWidget
 public:
     explicit ModelViewWidget(QWidget *parent = nullptr);
 
+    void beginSceneBatch(const QString &message);
+    void endSceneBatch(const QString &message);
     void clearScene(const QString &message);
     void addModelData(const QString &filePath, vtkPolyData *polyData);
     void setReferenceImageData(vtkImageData *imageData);
@@ -42,10 +44,15 @@ protected:
 
 private:
     void setCursorWorldPositionInternal(const std::array<double, 3> &worldPosition, bool emitSignal);
+    void queueSceneUpdate(bool resetCamera);
+    void flushQueuedSceneUpdate();
 
     QLabel *m_statusLabel;
     QVTKOpenGLNativeWidget *m_vtkWidget;
     std::unique_ptr<ModelViewCameraController> m_cameraController;
     std::unique_ptr<ModelViewCrosshairController> m_crosshairController;
     vtkSmartPointer<vtkRenderer> m_renderer;
+    bool m_sceneBatchActive = false;
+    bool m_sceneNeedsRender = false;
+    bool m_sceneNeedsCameraReset = false;
 };

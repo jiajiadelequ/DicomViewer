@@ -63,11 +63,26 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
     layout->addWidget(m_statusLabel);
 }
 
+void ModelViewWidget::beginSceneBatch(const QString &message)
+{
+    m_sceneBatchActive = true;
+    m_sceneNeedsRender = false;
+    m_sceneNeedsCameraReset = false;
+    clearScene(message);
+}
+
+void ModelViewWidget::endSceneBatch(const QString &message)
+{
+    m_statusLabel->setText(message);
+    m_sceneBatchActive = false;
+    flushQueuedSceneUpdate();
+}
+
 void ModelViewWidget::clearScene(const QString &message)
 {
     m_crosshairController->clearScene();
     m_statusLabel->setText(message);
-    m_vtkWidget->renderWindow()->Render();
+    queueSceneUpdate(false);
 }
 
 void ModelViewWidget::addModelData(const QString &filePath, vtkPolyData *polyData)
@@ -87,23 +102,24 @@ void ModelViewWidget::addModelData(const QString &filePath, vtkPolyData *polyDat
 
     m_crosshairController->addModelActor(actor, polyData);
     m_crosshairController->updateGeometry();
-    m_cameraController->resetToAnatomicalView();
-    m_statusLabel->setText(QStringLiteral("已加载模型: %1").arg(info.fileName()));
-    m_vtkWidget->renderWindow()->Render();
+    if (!m_sceneBatchActive) {
+        m_statusLabel->setText(QStringLiteral("已加载模型: %1").arg(info.fileName()));
+    }
+    queueSceneUpdate(true);
 }
 
 void ModelViewWidget::setReferenceImageData(vtkImageData *imageData)
 {
     m_crosshairController->setReferenceImageData(imageData);
     m_crosshairController->updateGeometry();
-    m_vtkWidget->renderWindow()->Render();
+    queueSceneUpdate(false);
 }
 
 void ModelViewWidget::setCrosshairEnabled(bool enabled)
 {
     m_crosshairController->setEnabled(enabled);
     m_crosshairController->updateGeometry();
-    m_vtkWidget->renderWindow()->Render();
+    queueSceneUpdate(false);
 }
 
 void ModelViewWidget::setCursorWorldPosition(double x, double y, double z)
@@ -178,4 +194,26 @@ void ModelViewWidget::setCursorWorldPositionInternal(const std::array<double, 3>
                                         currentPosition[1],
                                         currentPosition[2]);
     }
+}
+
+void ModelViewWidget::queueSceneUpdate(bool resetCamera)
+{
+    m_sceneNeedsRender = true;
+    m_sceneNeedsCameraReset = m_sceneNeedsCameraReset || resetCamera;
+    if (!m_sceneBatchActive) {
+        flushQueuedSceneUpdate();
+    }
+}
+
+void ModelViewWidget::flushQueuedSceneUpdate()
+{
+    if (m_sceneNeedsCameraReset) {
+        m_cameraController->resetToAnatomicalView();
+    }
+    if (m_sceneNeedsRender) {
+        m_vtkWidget->renderWindow()->Render();
+    }
+
+    m_sceneNeedsRender = false;
+    m_sceneNeedsCameraReset = false;
 }

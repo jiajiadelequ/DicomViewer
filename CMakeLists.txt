@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(DicomViewerSkeleton VERSION 0.1 LANGUAGES CXX)
 
+enable_testing()
+
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -102,7 +104,7 @@ set(PROJECT_SOURCES
     mainwindow.cpp
     mainwindow.h
     src/model/studypackage.h
-    src/model/studyloadresult.h
+    src/core/runtime/studyloadresult.h
     src/core/casepackagereader.h
     src/core/casepackagereader.cpp
     src/core/studyloader.h
@@ -113,6 +115,8 @@ set(PROJECT_SOURCES
     src/view/splittergridwidget.cpp
     src/view/mprslicemath.h
     src/view/mprslicemath.cpp
+    src/view/mprcrosshaircontroller.h
+    src/view/mprcrosshaircontroller.cpp
     src/view/mprwindowlevelcontroller.h
     src/view/mprwindowlevelcontroller.cpp
     src/view/modelviewcameracontroller.h
@@ -327,6 +331,47 @@ add_custom_command(TARGET dicom_to_obj POST_BUILD
     ${ITK_DLLS}
     $<TARGET_FILE_DIR:dicom_to_obj>
 )
+
+add_executable(dicomviewer_logic_tests
+    tests/logic_tests.cpp
+    src/model/studypackage.h
+    src/core/casepackagereader.h
+    src/core/casepackagereader.cpp
+    src/view/mprslicemath.h
+    src/view/mprslicemath.cpp
+)
+target_link_libraries(dicomviewer_logic_tests PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    ${VTK_LIBRARIES}
+    ${ITK_LIBRARIES}
+    gdcmCommon
+    gdcmDSED
+    gdcmIOD
+    gdcmDICT
+    gdcmMSFF
+)
+target_include_directories(dicomviewer_logic_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(dicomviewer_logic_tests PRIVATE _UNICODE UNICODE)
+
+add_custom_command(TARGET dicomviewer_logic_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${VTK_DLLS}
+    $<TARGET_FILE_DIR:dicomviewer_logic_tests>
+)
+add_custom_command(TARGET dicomviewer_logic_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${GDCM_DLLS}
+    $<TARGET_FILE_DIR:dicomviewer_logic_tests>
+)
+add_custom_command(TARGET dicomviewer_logic_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${ITK_DLLS}
+    $<TARGET_FILE_DIR:dicomviewer_logic_tests>
+)
+
+add_test(NAME dicomviewer_logic_tests COMMAND dicomviewer_logic_tests)
 
 
 

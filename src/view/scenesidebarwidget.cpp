@@ -2,7 +2,6 @@
 
 #include <QLabel>
 #include <QListWidget>
-#include <QListWidgetItem>
 #include <QPushButton>
 #include <QVBoxLayout>
 
@@ -40,8 +39,7 @@ void SceneSidebarWidget::clearObjects()
 
 void SceneSidebarWidget::addObject(const QString &filePath)
 {
-    auto *item = new QListWidgetItem(filePath, m_objectList);
-    item->setCheckState(Qt::Checked);
+    m_objectList->addItem(filePath);
 }
 
 void SceneSidebarWidget::setSummaryText(const QString &text)

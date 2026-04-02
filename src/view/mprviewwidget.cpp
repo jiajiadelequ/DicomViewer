@@ -1,5 +1,6 @@
 #include "mprviewwidget.h"
 
+#include "mprcrosshaircontroller.h"
 #include "mprwindowlevelcontroller.h"
 
 #include <QEvent>
@@ -10,10 +11,7 @@
 
 #include <QVTKOpenGLNativeWidget.h>
 
-#include <vtkActor.h>
 #include <vtkCamera.h>
-#include <vtkCellArray.h>
-#include <vtkCellPicker.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <vtkImageActor.h>
 #include <vtkImageData.h>
@@ -22,10 +20,6 @@
 #include <vtkImageReslice.h>
 #include <vtkInteractorStyleImage.h>
 #include <vtkMath.h>
-#include <vtkPoints.h>
-#include <vtkPolyData.h>
-#include <vtkPolyDataMapper.h>
-#include <vtkProperty.h>
 #include <vtkRenderWindow.h>
 #include <vtkRenderWindowInteractor.h>
 #include <vtkRenderer.h>
@@ -52,10 +46,7 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     , m_reslice(vtkSmartPointer<vtkImageReslice>::New())
     , m_windowLevel(vtkSmartPointer<vtkImageMapToWindowLevelColors>::New())
     , m_imageActor(vtkSmartPointer<vtkImageActor>::New())
-    , m_crosshairActor(vtkSmartPointer<vtkActor>::New())
-    , m_crosshairPolyData(vtkSmartPointer<vtkPolyData>::New())
-    , m_crosshairPoints(vtkSmartPointer<vtkPoints>::New())
-    , m_imagePicker(vtkSmartPointer<vtkCellPicker>::New())
+    , m_crosshairController(std::make_unique<MprCrosshairController>(m_imageActor))
     , m_imageData(vtkSmartPointer<vtkImageData>::New())
 {
     auto *layout = new QVBoxLayout(this);
@@ -82,33 +73,9 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     m_imageActor->InterpolateOff();
     m_imageActor->SetVisibility(false);
 
-    m_crosshairPoints->SetNumberOfPoints(4);
-    auto crosshairLines = vtkSmartPointer<vtkCellArray>::New();
-    crosshairLines->InsertNextCell(2);
-    crosshairLines->InsertCellPoint(0);
-    crosshairLines->InsertCellPoint(1);
-    crosshairLines->InsertNextCell(2);
-    crosshairLines->InsertCellPoint(2);
-    crosshairLines->InsertCellPoint(3);
-    m_crosshairPolyData->SetPoints(m_crosshairPoints);
-    m_crosshairPolyData->SetLines(crosshairLines);
-
-    auto crosshairMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-    crosshairMapper->SetInputData(m_crosshairPolyData);
-    m_crosshairActor->SetMapper(crosshairMapper);
-    m_crosshairActor->GetProperty()->SetColor(0.95, 0.82, 0.15);
-    m_crosshairActor->GetProperty()->SetLineWidth(2.0f);
-    m_crosshairActor->GetProperty()->LightingOff();
-    m_crosshairActor->PickableOff();
-    m_crosshairActor->SetVisibility(false);
-
-    m_imagePicker->PickFromListOn();
-    m_imagePicker->AddPickList(m_imageActor);
-    m_imagePicker->SetTolerance(0.0005);
-
     m_renderer->SetBackground(0.05, 0.05, 0.06);
     m_renderer->AddActor(m_imageActor);
-    m_renderer->AddActor(m_crosshairActor);
+    m_renderer->AddActor(m_crosshairController->actor());
     m_vtkWidget->renderWindow()->AddRenderer(m_renderer);
     resetCamera();
 
@@ -159,16 +126,14 @@ void MprViewWidget::setImageData(vtkImageData *imageData)
     m_windowLevelController->ensureInitialized(m_imageData);
     m_windowLevelController->applyTo(m_windowLevel);
     m_imageActor->SetVisibility(true);
-    m_crosshairActor->SetVisibility(m_crosshairEnabled);
+    m_crosshairController->setVisible(true);
     updateSliceControls();
     renderCurrentState(true);
 }
 
 void MprViewWidget::setCrosshairEnabled(bool enabled)
 {
-    m_crosshairEnabled = enabled;
-    m_crosshairDragActive = false;
-    m_crosshairActor->SetVisibility(m_hasImage && m_crosshairEnabled);
+    m_crosshairController->setEnabled(enabled);
 
     if (m_hasImage) {
         renderCurrentState(false);
@@ -193,7 +158,6 @@ void MprViewWidget::refreshView()
 void MprViewWidget::clearView(const QString &message)
 {
     m_hasImage = false;
-    m_crosshairDragActive = false;
     m_sliceGeometry = SliceGeometry {};
     m_cursorWorldPosition = Axis { 0.0, 0.0, 0.0 };
     m_windowLevelController->reset();
@@ -207,7 +171,7 @@ void MprViewWidget::clearView(const QString &message)
 
     m_reslice->SetInputData(static_cast<vtkImageData *>(nullptr));
     m_imageActor->SetVisibility(false);
-    m_crosshairActor->SetVisibility(false);
+    m_crosshairController->setVisible(false);
     m_vtkWidget->renderWindow()->Render();
 }
 
@@ -224,18 +188,22 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
             break;
         }
 
-        if (m_crosshairEnabled && mouseEvent->modifiers() == Qt::NoModifier) {
+        if (m_crosshairController->isEnabled() && mouseEvent->modifiers() == Qt::NoModifier) {
             Axis worldPosition;
-            if (!pickWorldPosition(mouseEvent->pos(), &worldPosition)) {
+            if (!m_crosshairController->beginInteraction(m_renderer,
+                                                         m_vtkWidget,
+                                                         mouseEvent->pos(),
+                                                         m_sliceGeometry,
+                                                         m_slider->value(),
+                                                         &worldPosition)) {
                 break;
             }
 
-            m_crosshairDragActive = true;
             setCursorWorldPositionInternal(worldPosition, true, false);
             return true;
         }
 
-        if (!m_crosshairEnabled && mouseEvent->modifiers() == Qt::NoModifier) {
+        if (!m_crosshairController->isEnabled() && mouseEvent->modifiers() == Qt::NoModifier) {
             if (!m_windowLevelController->canStartDrag()) {
                 break;
             }
@@ -248,16 +216,15 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
     case QEvent::MouseMove: {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
 
-        if (m_crosshairDragActive) {
-            if ((mouseEvent->buttons() & Qt::LeftButton) == 0) {
-                m_crosshairDragActive = false;
-                break;
-            }
-
-            Axis worldPosition;
-            if (pickWorldPosition(mouseEvent->pos(), &worldPosition)) {
-                setCursorWorldPositionInternal(worldPosition, true, false);
-            }
+        Axis worldPosition;
+        if (m_crosshairController->updateInteraction(m_renderer,
+                                                     m_vtkWidget,
+                                                     (mouseEvent->buttons() & Qt::LeftButton) != 0,
+                                                     mouseEvent->pos(),
+                                                     m_sliceGeometry,
+                                                     m_slider->value(),
+                                                     &worldPosition)) {
+            setCursorWorldPositionInternal(worldPosition, true, false);
             return true;
         }
 
@@ -277,8 +244,7 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
     }
     case QEvent::MouseButtonRelease: {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
-        if (m_crosshairDragActive && mouseEvent->button() == Qt::LeftButton) {
-            m_crosshairDragActive = false;
+        if (m_crosshairController->endInteraction(mouseEvent->button() == Qt::LeftButton)) {
             return true;
         }
         if (m_windowLevelController->isDragging() && mouseEvent->button() == Qt::LeftButton) {
@@ -314,7 +280,7 @@ void MprViewWidget::onSliceChanged(int value)
 
     updateCursorWorldPositionFromSlider(value);
     renderCurrentState(false);
-    if (m_crosshairEnabled) {
+    if (m_crosshairController->isEnabled()) {
         emit cursorWorldPositionChanged(m_cursorWorldPosition[0],
                                         m_cursorWorldPosition[1],
                                         m_cursorWorldPosition[2]);
@@ -388,11 +354,11 @@ void MprViewWidget::renderCurrentState(bool fitViewport)
         return;
     }
 
-    m_crosshairActor->SetVisibility(m_crosshairEnabled);
+    m_crosshairController->setVisible(true);
     m_windowLevelController->ensureInitialized(m_imageData);
     m_windowLevelController->applyTo(m_windowLevel);
     applyCurrentSlice(m_slider->value());
-    updateCrosshairGeometry();
+    m_crosshairController->updateGeometry(m_cursorWorldPosition, m_sliceGeometry, m_slider->value());
 
     if (!m_vtkWidget->isVisible() || m_vtkWidget->width() <= 0 || m_vtkWidget->height() <= 0) {
         return;
@@ -447,39 +413,6 @@ void MprViewWidget::updateCursorWorldPositionFromSlider(int sliderValue)
                                                   MprSliceMath::scaleAxis(m_sliceGeometry.yAxis, yPosition));
 }
 
-void MprViewWidget::updateCrosshairGeometry()
-{
-    if (!m_hasImage || !m_crosshairActor->GetVisibility()) {
-        return;
-    }
-
-    const Axis sliceOrigin = sliceOriginForSliderValue(m_slider->value());
-    const double xMinimum = m_sliceGeometry.outputOrigin[0];
-    const double xMaximum = MprSliceMath::maxOutputCoordinate(m_sliceGeometry.outputOrigin[0],
-                                                              m_sliceGeometry.xSpacing,
-                                                              m_sliceGeometry.outputExtent[0],
-                                                              m_sliceGeometry.outputExtent[1]);
-    const double yMinimum = m_sliceGeometry.outputOrigin[1];
-    const double yMaximum = MprSliceMath::maxOutputCoordinate(m_sliceGeometry.outputOrigin[1],
-                                                              m_sliceGeometry.ySpacing,
-                                                              m_sliceGeometry.outputExtent[2],
-                                                              m_sliceGeometry.outputExtent[3]);
-    const double xPosition = std::clamp(MprSliceMath::dotProduct(MprSliceMath::subtractAxes(m_cursorWorldPosition, sliceOrigin), m_sliceGeometry.xAxis),
-                                        xMinimum,
-                                        xMaximum);
-    const double yPosition = std::clamp(MprSliceMath::dotProduct(MprSliceMath::subtractAxes(m_cursorWorldPosition, sliceOrigin), m_sliceGeometry.yAxis),
-                                        yMinimum,
-                                        yMaximum);
-    constexpr double overlayDepth = 0.1;
-
-    m_crosshairPoints->SetPoint(0, xPosition, yMinimum, overlayDepth);
-    m_crosshairPoints->SetPoint(1, xPosition, yMaximum, overlayDepth);
-    m_crosshairPoints->SetPoint(2, xMinimum, yPosition, overlayDepth);
-    m_crosshairPoints->SetPoint(3, xMaximum, yPosition, overlayDepth);
-    m_crosshairPoints->Modified();
-    m_crosshairPolyData->Modified();
-}
-
 void MprViewWidget::updateSliceControls()
 {
     const int currentValue = sliderValueForWorldPosition(m_cursorWorldPosition);
@@ -528,27 +461,3 @@ int MprViewWidget::sliderValueForWorldPosition(const Axis &worldPosition) const
 {
     return MprSliceMath::sliderValueForWorldPosition(m_sliceGeometry, worldPosition);
 }
-
-bool MprViewWidget::pickWorldPosition(const QPoint &widgetPosition, Axis *worldPosition) const
-{
-    if (worldPosition == nullptr || !m_hasImage || !m_imageActor->GetVisibility()) {
-        return false;
-    }
-
-    const double devicePixelRatio = m_vtkWidget->devicePixelRatioF();
-    const int displayX = static_cast<int>(std::lround(widgetPosition.x() * devicePixelRatio));
-    const int displayY = static_cast<int>(std::lround((m_vtkWidget->height() - 1 - widgetPosition.y()) * devicePixelRatio));
-    if (m_imagePicker->Pick(displayX, displayY, 0.0, m_renderer) == 0) {
-        return false;
-    }
-
-    double pickedPosition[3] { 0.0, 0.0, 0.0 };
-    m_imagePicker->GetPickPosition(pickedPosition);
-    const Axis sliceOrigin = sliceOriginForSliderValue(m_slider->value());
-    *worldPosition = MprSliceMath::addAxes(MprSliceMath::addAxes(sliceOrigin,
-                                                                 MprSliceMath::scaleAxis(m_sliceGeometry.xAxis, pickedPosition[0])),
-                                           MprSliceMath::scaleAxis(m_sliceGeometry.yAxis, pickedPosition[1]));
-    return true;
-}
-
-

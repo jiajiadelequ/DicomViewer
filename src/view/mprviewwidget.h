@@ -9,6 +9,7 @@
 #include <vtkSmartPointer.h>
 
 class QLabel;
+class MprCrosshairController;
 class QObject;
 class QEvent;
 class QPoint;
@@ -16,14 +17,10 @@ class QResizeEvent;
 class QSlider;
 class QVTKOpenGLNativeWidget;
 class MprWindowLevelController;
-class vtkActor;
-class vtkCellPicker;
 class vtkImageActor;
 class vtkImageData;
 class vtkImageMapToWindowLevelColors;
 class vtkImageReslice;
-class vtkPoints;
-class vtkPolyData;
 class vtkRenderer;
 
 class MprViewWidget final : public QWidget
@@ -68,13 +65,11 @@ private:
     void renderCurrentState(bool fitViewport);
     void setCursorWorldPositionInternal(const std::array<double, 3> &worldPosition, bool emitSignal, bool fitViewport);
     void updateCursorWorldPositionFromSlider(int sliderValue);
-    void updateCrosshairGeometry();
     void updateSliceControls();
     void updateSliceLabel(int sliderValue);
     void setWindowLevelInternal(double window, double level, bool emitSignal);
     [[nodiscard]] std::array<double, 3> sliceOriginForSliderValue(int sliderValue) const;
     [[nodiscard]] int sliderValueForWorldPosition(const std::array<double, 3> &worldPosition) const;
-    [[nodiscard]] bool pickWorldPosition(const QPoint &widgetPosition, std::array<double, 3> *worldPosition) const;
 
     Orientation m_orientation;
     QLabel *m_titleLabel;
@@ -86,14 +81,9 @@ private:
     vtkSmartPointer<vtkImageReslice> m_reslice;
     vtkSmartPointer<vtkImageMapToWindowLevelColors> m_windowLevel;
     vtkSmartPointer<vtkImageActor> m_imageActor;
-    vtkSmartPointer<vtkActor> m_crosshairActor;
-    vtkSmartPointer<vtkPolyData> m_crosshairPolyData;
-    vtkSmartPointer<vtkPoints> m_crosshairPoints;
-    vtkSmartPointer<vtkCellPicker> m_imagePicker;
+    std::unique_ptr<MprCrosshairController> m_crosshairController;
     vtkSmartPointer<vtkImageData> m_imageData;
     SliceGeometry m_sliceGeometry;
     std::array<double, 3> m_cursorWorldPosition { 0.0, 0.0, 0.0 };
     bool m_hasImage = false;
-    bool m_crosshairEnabled = false;
-    bool m_crosshairDragActive = false;
 };

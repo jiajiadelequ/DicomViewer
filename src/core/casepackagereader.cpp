@@ -193,6 +193,13 @@ QStringList candidateDirectories(const QDir &rootDir)
     return results;
 }
 
+bool sameDirectoryPath(const QString &lhs, const QString &rhs)
+{
+    return QString::compare(QDir::fromNativeSeparators(lhs),
+                            QDir::fromNativeSeparators(rhs),
+                            Qt::CaseInsensitive) == 0;
+}
+
 QStringList largestSeriesFilesInDirectory(const QString &directoryPath)
 {
     try {
@@ -247,27 +254,51 @@ bool isBetterDicomMatch(const DicomDirectoryMatch &candidate, const DicomDirecto
     return QString::compare(candidate.directoryPath, currentBest.directoryPath, Qt::CaseInsensitive) < 0;
 }
 
+DicomDirectoryMatch inspectDicomDirectory(const QDir &rootDir, const QString &directoryPath)
+{
+    DicomDirectoryMatch candidate;
+    if (directoryPath.isEmpty() || !directoryLooksLikeDicom(directoryPath)) {
+        return candidate;
+    }
+
+    const QStringList seriesFiles = largestSeriesFilesInDirectory(directoryPath);
+    if (seriesFiles.isEmpty()) {
+        return candidate;
+    }
+
+    candidate.directoryPath = directoryPath;
+    candidate.files = seriesFiles;
+    candidate.fileCount = seriesFiles.size();
+    candidate.depth = directoryDepth(rootDir, directoryPath);
+    candidate.preferredName = hasPreferredDicomDirectoryName(directoryPath);
+    return candidate;
+}
+
 DicomDirectoryMatch resolveDicomDirectory(const QDir &rootDir)
 {
     DicomDirectoryMatch bestMatch;
+    const QString rootPath = QDir::toNativeSeparators(rootDir.absolutePath());
+    const QString preferredPath = findChildDirectory(rootDir, {QStringLiteral("dicom"), QStringLiteral("dicoms")});
+
+    if (!preferredPath.isEmpty()) {
+        const DicomDirectoryMatch preferredMatch = inspectDicomDirectory(rootDir, preferredPath);
+        if (preferredMatch.isValid()) {
+            return preferredMatch;
+        }
+    }
+
+    const DicomDirectoryMatch rootMatch = inspectDicomDirectory(rootDir, rootPath);
+    if (rootMatch.isValid()) {
+        bestMatch = rootMatch;
+    }
 
     for (const QString &directoryPath : candidateDirectories(rootDir)) {
-        if (!directoryLooksLikeDicom(directoryPath)) {
+        if (sameDirectoryPath(directoryPath, rootPath)
+            || (!preferredPath.isEmpty() && sameDirectoryPath(directoryPath, preferredPath))) {
             continue;
         }
 
-        const QStringList seriesFiles = largestSeriesFilesInDirectory(directoryPath);
-        if (seriesFiles.isEmpty()) {
-            continue;
-        }
-
-        DicomDirectoryMatch candidate;
-        candidate.directoryPath = directoryPath;
-        candidate.files = seriesFiles;
-        candidate.fileCount = seriesFiles.size();
-        candidate.depth = directoryDepth(rootDir, directoryPath);
-        candidate.preferredName = hasPreferredDicomDirectoryName(directoryPath);
-
+        const DicomDirectoryMatch candidate = inspectDicomDirectory(rootDir, directoryPath);
         if (isBetterDicomMatch(candidate, bestMatch)) {
             bestMatch = candidate;
         }

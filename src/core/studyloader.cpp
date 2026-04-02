@@ -4,6 +4,7 @@
 
 #include <QDebug>
 #include <QFileInfo>
+#include <QLoggingCategory>
 #include <gdcmException.h>
 #include <QStringList>
 
@@ -35,6 +36,8 @@ using VolumeReaderType = itk::ImageSeriesReader<VolumeImageType>;
 using VolumeNamesGeneratorType = itk::GDCMSeriesFileNames;
 using VolumeImageIOType = itk::GDCMImageIO;
 using VolumeConnectorType = itk::ImageToVTKImageFilter<VolumeImageType>;
+
+Q_LOGGING_CATEGORY(lcStudyLoadDiagnostics, "dicomviewer.studyloader.diagnostics", QtWarningMsg)
 
 QString formatItkDirection(const VolumeImageType::DirectionType &direction)
 {
@@ -216,13 +219,13 @@ void logOrientationDiagnostics(const QString &dicomPath,
     vtkImage->GetSpacing(vtkSpacing);
     vtkImage->GetExtent(vtkExtent);
 
-    qInfo().noquote() << QStringLiteral("[DICOM] path=%1").arg(dicomPath);
-    qInfo().noquote()
+    qCInfo(lcStudyLoadDiagnostics).noquote() << QStringLiteral("[DICOM] path=%1").arg(dicomPath);
+    qCInfo(lcStudyLoadDiagnostics).noquote()
         << QStringLiteral("[DICOM] file-count=%1 first=%2 last=%3")
                .arg(static_cast<qlonglong>(fileNames.size()))
                .arg(fileNames.empty() ? QStringLiteral("<none>") : QString::fromStdString(fileNames.front()))
                .arg(fileNames.empty() ? QStringLiteral("<none>") : QString::fromStdString(fileNames.back()));
-    qInfo().noquote()
+    qCInfo(lcStudyLoadDiagnostics).noquote()
         << QStringLiteral("[DICOM] itk-size=[%1, %2, %3] itk-spacing=[%4, %5, %6] itk-origin=[%7, %8, %9]")
                .arg(static_cast<qlonglong>(itkSize[0]))
                .arg(static_cast<qlonglong>(itkSize[1]))
@@ -233,8 +236,8 @@ void logOrientationDiagnostics(const QString &dicomPath,
                .arg(itkOrigin[0], 0, 'f', 6)
                .arg(itkOrigin[1], 0, 'f', 6)
                .arg(itkOrigin[2], 0, 'f', 6);
-    qInfo().noquote() << QStringLiteral("[DICOM] itk-direction=%1").arg(formatItkDirection(itkDirection));
-    qInfo().noquote()
+    qCInfo(lcStudyLoadDiagnostics).noquote() << QStringLiteral("[DICOM] itk-direction=%1").arg(formatItkDirection(itkDirection));
+    qCInfo(lcStudyLoadDiagnostics).noquote()
         << QStringLiteral("[DICOM] vtk-extent=[%1, %2, %3, %4, %5, %6] vtk-spacing=[%7, %8, %9] vtk-origin=[%10, %11, %12]")
                .arg(vtkExtent[0])
                .arg(vtkExtent[1])
@@ -248,20 +251,20 @@ void logOrientationDiagnostics(const QString &dicomPath,
                .arg(vtkOrigin[0], 0, 'f', 6)
                .arg(vtkOrigin[1], 0, 'f', 6)
                .arg(vtkOrigin[2], 0, 'f', 6);
-    qInfo().noquote() << QStringLiteral("[DICOM] vtk-direction=%1").arg(formatVtkDirection(vtkImage));
+    qCInfo(lcStudyLoadDiagnostics).noquote() << QStringLiteral("[DICOM] vtk-direction=%1").arg(formatVtkDirection(vtkImage));
 
     auto metaImageIO = VolumeImageIOType::New();
-    qInfo().noquote()
+    qCInfo(lcStudyLoadDiagnostics).noquote()
         << QStringLiteral("[DICOM] first-instance=%1 first-position=%2 first-orientation=%3")
                .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.front(), "0020|0013"))
                .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.front(), "0020|0032"))
                .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.front(), "0020|0037"));
-    qInfo().noquote()
+    qCInfo(lcStudyLoadDiagnostics).noquote()
         << QStringLiteral("[DICOM] last-instance=%1 last-position=%2 last-orientation=%3")
                .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.back(), "0020|0013"))
                .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.back(), "0020|0032"))
                .arg(fileNames.empty() ? QStringLiteral("<none>") : readMetaDataTag(metaImageIO, fileNames.back(), "0020|0037"));
-    qInfo().noquote()
+    qCInfo(lcStudyLoadDiagnostics).noquote()
         << QStringLiteral("[DICOM] voi-window=%1 voi-level=%2 explanation=%3")
                .arg(preset.isValid ? QString::number(preset.window, 'f', 3) : QStringLiteral("<missing>"))
                .arg(preset.isValid ? QString::number(preset.level, 'f', 3) : QStringLiteral("<missing>"))
@@ -317,59 +320,61 @@ void loadDicomData(const QString &dicomPath, StudyLoadResult *result)
 
     try {
         auto namesGenerator = VolumeNamesGeneratorType::New();
-    namesGenerator->SetUseSeriesDetails(true);
-    namesGenerator->SetDirectory(dicomPath.toStdString());
+        namesGenerator->SetUseSeriesDetails(true);
+        namesGenerator->SetDirectory(dicomPath.toStdString());
 
-    const auto fileNames = selectLargestSeriesFiles(namesGenerator);
-    if (fileNames.empty()) {
-        result->errorMessage = QStringLiteral("未在目录中识别到有效的 DICOM 序列: %1").arg(dicomPath);
-        return;
-    }
+        const auto fileNames = selectLargestSeriesFiles(namesGenerator);
+        if (fileNames.empty()) {
+            result->errorMessage = QStringLiteral("未在目录中识别到有效的 DICOM 序列: %1").arg(dicomPath);
+            return;
+        }
 
-    auto imageIO = VolumeImageIOType::New();
-    auto reader = VolumeReaderType::New();
-    reader->SetImageIO(imageIO);
-    reader->SetFileNames(fileNames);
-    reader->ForceOrthogonalDirectionOff();
-    reader->Update();
+        auto imageIO = VolumeImageIOType::New();
+        auto reader = VolumeReaderType::New();
+        reader->SetImageIO(imageIO);
+        reader->SetFileNames(fileNames);
+        reader->ForceOrthogonalDirectionOff();
+        reader->Update();
 
-    auto connector = VolumeConnectorType::New();
-    connector->SetInput(reader->GetOutput());
-    connector->Update();
+        auto connector = VolumeConnectorType::New();
+        connector->SetInput(reader->GetOutput());
+        connector->Update();
 
-    auto *connectorOutput = connector->GetOutput();
-    if (connectorOutput == nullptr) {
-        result->errorMessage = QStringLiteral("VTK 转换失败，未生成影像数据: %1").arg(dicomPath);
-        return;
-    }
+        auto *connectorOutput = connector->GetOutput();
+        if (connectorOutput == nullptr) {
+            result->errorMessage = QStringLiteral("VTK 转换失败，未生成影像数据: %1").arg(dicomPath);
+            return;
+        }
 
-    int extent[6] { 0, -1, 0, -1, 0, -1 };
-    connectorOutput->GetExtent(extent);
-    if (extent[0] > extent[1] || extent[2] > extent[3] || extent[4] > extent[5]) {
-        result->errorMessage = QStringLiteral("DICOM 序列维度无效，无法显示: %1").arg(dicomPath);
-        return;
-    }
+        int extent[6] { 0, -1, 0, -1, 0, -1 };
+        connectorOutput->GetExtent(extent);
+        if (extent[0] > extent[1] || extent[2] > extent[3] || extent[4] > extent[5]) {
+            result->errorMessage = QStringLiteral("DICOM 序列维度无效，无法显示: %1").arg(dicomPath);
+            return;
+        }
 
-    auto *scalars = connectorOutput->GetPointData() != nullptr
-        ? connectorOutput->GetPointData()->GetScalars()
-        : nullptr;
-    if (scalars == nullptr) {
-        result->errorMessage = QStringLiteral("DICOM 序列没有可显示的像素标量数据: %1").arg(dicomPath);
-        return;
-    }
+        auto *scalars = connectorOutput->GetPointData() != nullptr
+            ? connectorOutput->GetPointData()->GetScalars()
+            : nullptr;
+        if (scalars == nullptr) {
+            result->errorMessage = QStringLiteral("DICOM 序列没有可显示的像素标量数据: %1").arg(dicomPath);
+            return;
+        }
 
-    auto persistentImageData = vtkSmartPointer<vtkImageData>::New();
-    persistentImageData->DeepCopy(connectorOutput);
-    applyItkDirectionToVtkImage(reader->GetOutput(), persistentImageData);
-    persistentImageData->Modified();
+        auto persistentImageData = vtkSmartPointer<vtkImageData>::New();
+        persistentImageData->DeepCopy(connectorOutput);
+        applyItkDirectionToVtkImage(reader->GetOutput(), persistentImageData);
+        persistentImageData->Modified();
 
-    result->windowLevelPreset = readWindowLevelPreset(VolumeImageIOType::New(), fileNames.front());
-    result->imageData = persistentImageData;
-    logOrientationDiagnostics(dicomPath,
-                              reader->GetOutput(),
-                              result->imageData,
-                              fileNames,
-                              result->windowLevelPreset);
+        result->windowLevelPreset = readWindowLevelPreset(VolumeImageIOType::New(), fileNames.front());
+        result->imageData = persistentImageData;
+        if (lcStudyLoadDiagnostics().isInfoEnabled()) {
+            logOrientationDiagnostics(dicomPath,
+                                      reader->GetOutput(),
+                                      result->imageData,
+                                      fileNames,
+                                      result->windowLevelPreset);
+        }
     } catch (const itk::ExceptionObject &ex) {
         result->errorMessage = QStringLiteral("ITK/GDCM 读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
     } catch (const gdcm::Exception &ex) {
@@ -435,6 +440,3 @@ StudyLoadResult StudyLoader::loadFromDirectory(const QString &rootPath)
 
     return result;
 }
-
-
-

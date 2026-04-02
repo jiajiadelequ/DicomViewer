@@ -99,15 +99,17 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
         }
     }
 
+    const QString modelSummaryText = result.models.empty()
+        ? QStringLiteral("未发现模型文件")
+        : QStringLiteral("已发现 %1 个模型文件").arg(static_cast<int>(result.models.size()));
     sidebarPanel->clearObjects();
-    volumePanel->clearScene(result.models.empty()
-                                ? QStringLiteral("未发现模型文件")
-                                : QStringLiteral("已发现 %1 个模型文件").arg(static_cast<int>(result.models.size())));
+    volumePanel->beginSceneBatch(modelSummaryText);
     volumePanel->setReferenceImageData(result.imageData);
     for (const LoadedModelData &model : result.models) {
         sidebarPanel->addObject(model.filePath);
         volumePanel->addModelData(model.filePath, model.polyData);
     }
+    volumePanel->endSceneBatch(modelSummaryText);
 
     sidebarPanel->setSummaryText(buildStudySummaryText(result.package));
     m_rootLayout->setCurrentWidget(m_contentPage);

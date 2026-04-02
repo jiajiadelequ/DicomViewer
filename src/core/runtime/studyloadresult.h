@@ -1,6 +1,6 @@
 #pragma once
 
-#include "studypackage.h"
+#include "src/model/studypackage.h"
 
 #include <QString>
 #include <vector>

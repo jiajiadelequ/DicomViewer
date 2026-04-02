@@ -1,6 +1,6 @@
 #pragma once
 
-#include "src/model/studyloadresult.h"
+#include "src/core/runtime/studyloadresult.h"
 
 class StudyLoader
 {
