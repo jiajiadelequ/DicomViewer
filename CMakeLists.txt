@@ -115,6 +115,10 @@ set(PROJECT_SOURCES
     src/view/mprslicemath.cpp
     src/view/mprwindowlevelcontroller.h
     src/view/mprwindowlevelcontroller.cpp
+    src/view/modelviewcameracontroller.h
+    src/view/modelviewcameracontroller.cpp
+    src/view/modelviewcrosshaircontroller.h
+    src/view/modelviewcrosshaircontroller.cpp
     src/view/mprviewwidget.h
     src/view/mprviewwidget.cpp
     src/view/modelviewwidget.h
