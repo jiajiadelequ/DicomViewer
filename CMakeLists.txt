@@ -279,5 +279,38 @@ add_custom_command(TARGET dicom_to_stl POST_BUILD
     $<TARGET_FILE_DIR:dicom_to_stl>
 )
 
+add_executable(dicom_to_obj
+    tools/dicom_to_obj.cpp
+)
+target_link_libraries(dicom_to_obj PRIVATE
+    ${VTK_LIBRARIES}
+    ${ITK_LIBRARIES}
+    gdcmCommon
+    gdcmDSED
+    gdcmIOD
+    gdcmDICT
+    gdcmMSFF
+)
+target_include_directories(dicom_to_obj PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(dicom_to_obj PRIVATE _UNICODE UNICODE)
+
+add_custom_command(TARGET dicom_to_obj POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${VTK_DLLS}
+    $<TARGET_FILE_DIR:dicom_to_obj>
+)
+add_custom_command(TARGET dicom_to_obj POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${GDCM_DLLS}
+    $<TARGET_FILE_DIR:dicom_to_obj>
+)
+add_custom_command(TARGET dicom_to_obj POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${ITK_DLLS}
+    $<TARGET_FILE_DIR:dicom_to_obj>
+)
+
 
 
