@@ -39,6 +39,15 @@
       "cwd": "${workspaceFolder}\\release",
       "preLaunchTask": "publish-release",
       "console": "integratedTerminal"
+    },
+    {
+      "name": "Publish And Run Slim Release",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\release-slim\\DicomViewerSkeleton.exe",
+      "cwd": "${workspaceFolder}\\release-slim",
+      "preLaunchTask": "publish-release-slim",
+      "console": "integratedTerminal"
     }
   ]
 }

@@ -6,14 +6,28 @@ if errorlevel 1 exit /b %errorlevel%
 
 set "QT_ROOT=D:\Qt5\5.15.2\msvc2019_64"
 set "WINDEPLOYQT_EXE=%QT_ROOT%\bin\windeployqt.exe"
+set "CMAKE_EXE=F:\VS\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
 set "BUILD_SCRIPT=%~dp0build-release-msvc.cmd"
+set "RUNTIME_SCRIPT=%~dp0copy-runtime-deps.cmake"
 set "SRC_DIR=%~dp0.."
 for %%I in ("%SRC_DIR%") do set "SRC_DIR=%%~fI"
 set "BUILD_DIR=%SRC_DIR%\build\release"
-set "PUBLISH_DIR=%SRC_DIR%\release"
+if not defined PUBLISH_SUBDIR set "PUBLISH_SUBDIR=release"
+if not defined WINDEPLOYQT_EXTRA_ARGS set "WINDEPLOYQT_EXTRA_ARGS="
+set "PUBLISH_DIR=%SRC_DIR%\%PUBLISH_SUBDIR%"
 
 if not exist "%WINDEPLOYQT_EXE%" (
     echo windeployqt not found: "%WINDEPLOYQT_EXE%"
+    exit /b 1
+)
+
+if not exist "%CMAKE_EXE%" (
+    echo cmake not found: "%CMAKE_EXE%"
+    exit /b 1
+)
+
+if not exist "%RUNTIME_SCRIPT%" (
+    echo runtime dependency script not found: "%RUNTIME_SCRIPT%"
     exit /b 1
 )
 
@@ -29,11 +43,17 @@ if exist "%PUBLISH_DIR%" rmdir /s /q "%PUBLISH_DIR%"
 mkdir "%PUBLISH_DIR%"
 if errorlevel 1 exit /b %errorlevel%
 
-for %%E in (exe dll pdb) do (
-    if exist "%BUILD_DIR%\*.%%E" copy /Y "%BUILD_DIR%\*.%%E" "%PUBLISH_DIR%\" >nul
-)
+copy /Y "%BUILD_DIR%\DicomViewerSkeleton.exe" "%PUBLISH_DIR%\" >nul
+if errorlevel 1 exit /b %errorlevel%
 
-"%WINDEPLOYQT_EXE%" --release --compiler-runtime --no-translations "%PUBLISH_DIR%\DicomViewerSkeleton.exe"
+"%WINDEPLOYQT_EXE%" --release --compiler-runtime --no-translations %WINDEPLOYQT_EXTRA_ARGS% "%PUBLISH_DIR%\DicomViewerSkeleton.exe"
+if errorlevel 1 exit /b %errorlevel%
+
+"%CMAKE_EXE%" ^
+ -DAPP_PATH="%PUBLISH_DIR%\DicomViewerSkeleton.exe" ^
+ -DPUBLISH_DIR="%PUBLISH_DIR%" ^
+ -DBUILD_DIR="%BUILD_DIR%" ^
+ -P "%RUNTIME_SCRIPT%"
 if errorlevel 1 exit /b %errorlevel%
 
 echo.

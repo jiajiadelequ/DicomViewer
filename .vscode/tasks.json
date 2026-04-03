@@ -29,6 +29,15 @@
       "problemMatcher": [
         "$msCompile"
       ]
+    },
+    {
+      "label": "publish-release-slim",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.vscode\\publish-release-slim-msvc.cmd",
+      "detail": "Builds Release and publishes a slimmer runnable package to ${workspaceFolder}\\release-slim",
+      "problemMatcher": [
+        "$msCompile"
+      ]
     }
   ]
 }
