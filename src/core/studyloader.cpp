@@ -10,7 +10,10 @@
 #include <QStringList>
 
 #include <vtkImageData.h>
+#include <vtkImageShiftScale.h>
 #include <vtkMatrix3x3.h>
+#include <vtkMatrix4x4.h>
+#include <vtkNIFTIImageReader.h>
 #include <vtkOBJReader.h>
 #include <vtkPLYReader.h>
 #include <vtkPointData.h>
@@ -26,6 +29,7 @@
 #include <itkImageToVTKImageFilter.h>
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace
@@ -57,6 +61,18 @@ StudyLoadResult cancelledResult()
     StudyLoadResult result;
     result.cancelled = true;
     return result;
+}
+
+bool isNiftiFilePath(const QString &filePath)
+{
+    const QString normalizedPath = QDir::fromNativeSeparators(filePath).toLower();
+    return normalizedPath.endsWith(QStringLiteral(".nii"))
+        || normalizedPath.endsWith(QStringLiteral(".nii.gz"));
+}
+
+bool nearlyEqual(double lhs, double rhs, double epsilon = 1e-8)
+{
+    return std::abs(lhs - rhs) <= epsilon;
 }
 
 QString formatItkDirection(const VolumeImageType::DirectionType &direction)
@@ -109,6 +125,109 @@ void applyItkDirectionToVtkImage(VolumeImageType *itkImage, vtkImageData *vtkIma
     }
 
     vtkImage->SetDirectionMatrix(directionMatrix);
+}
+
+bool buildPersistentImageData(vtkImageData *vtkImage,
+                              const QString &sourcePath,
+                              const QString &sourceLabel,
+                              vtkSmartPointer<vtkImageData> *persistentImageData,
+                              QString *errorMessage)
+{
+    if (persistentImageData == nullptr) {
+        return false;
+    }
+
+    if (vtkImage == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("VTK 转换失败，未生成影像数据: %1").arg(sourcePath);
+        }
+        return false;
+    }
+
+    int extent[6] { 0, -1, 0, -1, 0, -1 };
+    vtkImage->GetExtent(extent);
+    if (extent[0] > extent[1] || extent[2] > extent[3] || extent[4] > extent[5]) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("%1维度无效，无法显示: %2").arg(sourceLabel, sourcePath);
+        }
+        return false;
+    }
+
+    auto *scalars = vtkImage->GetPointData() != nullptr
+        ? vtkImage->GetPointData()->GetScalars()
+        : nullptr;
+    if (scalars == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("%1没有可显示的像素标量数据: %2").arg(sourceLabel, sourcePath);
+        }
+        return false;
+    }
+
+    auto persistentImage = vtkSmartPointer<vtkImageData>::New();
+    // 深拷贝以切断对当前 ITK/VTK 桥接管线生命周期的依赖。
+    persistentImage->DeepCopy(vtkImage);
+    persistentImage->Modified();
+    *persistentImageData = persistentImage;
+    return true;
+}
+
+void applyNiftiOrientation(vtkNIFTIImageReader *reader, vtkImageData *vtkImage)
+{
+    if (reader == nullptr || vtkImage == nullptr) {
+        return;
+    }
+
+    vtkMatrix4x4 *orientationMatrix = reader->GetSFormMatrix();
+    if (orientationMatrix == nullptr) {
+        orientationMatrix = reader->GetQFormMatrix();
+    }
+    if (orientationMatrix == nullptr) {
+        return;
+    }
+
+    auto directionMatrix = vtkSmartPointer<vtkMatrix3x3>::New();
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+            directionMatrix->SetElement(row, column, orientationMatrix->GetElement(row, column));
+        }
+    }
+
+    vtkImage->SetDirectionMatrix(directionMatrix);
+    vtkImage->SetOrigin(orientationMatrix->GetElement(0, 3),
+                        orientationMatrix->GetElement(1, 3),
+                        orientationMatrix->GetElement(2, 3));
+}
+
+vtkSmartPointer<vtkImageData> buildNiftiImageData(vtkNIFTIImageReader *reader)
+{
+    if (reader == nullptr || reader->GetOutput() == nullptr) {
+        return nullptr;
+    }
+
+    auto orientedImage = vtkSmartPointer<vtkImageData>::New();
+    orientedImage->DeepCopy(reader->GetOutput());
+    applyNiftiOrientation(reader, orientedImage);
+
+    const double slope = reader->GetRescaleSlope();
+    const double intercept = reader->GetRescaleIntercept();
+    if (nearlyEqual(slope, 1.0) && nearlyEqual(intercept, 0.0)) {
+        orientedImage->Modified();
+        return orientedImage;
+    }
+
+    const double effectiveSlope = nearlyEqual(slope, 0.0) ? 1.0 : slope;
+    auto shiftScale = vtkSmartPointer<vtkImageShiftScale>::New();
+    shiftScale->SetInputData(orientedImage);
+    shiftScale->SetShift(intercept / effectiveSlope);
+    shiftScale->SetScale(effectiveSlope);
+    shiftScale->SetOutputScalarTypeToDouble();
+    shiftScale->Update();
+
+    auto rescaledImage = vtkSmartPointer<vtkImageData>::New();
+    rescaledImage->DeepCopy(shiftScale->GetOutput());
+    applyNiftiOrientation(reader, rescaledImage);
+    rescaledImage->Modified();
+    return rescaledImage;
 }
 
 bool parseFirstDicomDecimal(const QString &rawValue, double *parsedValue)
@@ -305,6 +424,41 @@ void logOrientationDiagnostics(const QString &dicomPath,
                .arg(preset.explanation.isEmpty() ? QStringLiteral("<none>") : preset.explanation);
 }
 
+void logNiftiOrientationDiagnostics(const QString &filePath,
+                                    vtkNIFTIImageReader *reader,
+                                    vtkImageData *vtkImage)
+{
+    if (reader == nullptr || vtkImage == nullptr) {
+        return;
+    }
+
+    double vtkOrigin[3] { 0.0, 0.0, 0.0 };
+    double vtkSpacing[3] { 0.0, 0.0, 0.0 };
+    int vtkExtent[6] { 0, -1, 0, -1, 0, -1 };
+    vtkImage->GetOrigin(vtkOrigin);
+    vtkImage->GetSpacing(vtkSpacing);
+    vtkImage->GetExtent(vtkExtent);
+
+    qCInfo(lcStudyLoadDiagnostics).noquote() << QStringLiteral("[NIFTI] file=%1").arg(filePath);
+    qCInfo(lcStudyLoadDiagnostics).noquote()
+        << QStringLiteral("[NIFTI] vtk-extent=[%1, %2, %3, %4, %5, %6] vtk-spacing=[%7, %8, %9] vtk-origin=[%10, %11, %12] slope=%13 intercept=%14")
+               .arg(vtkExtent[0])
+               .arg(vtkExtent[1])
+               .arg(vtkExtent[2])
+               .arg(vtkExtent[3])
+               .arg(vtkExtent[4])
+               .arg(vtkExtent[5])
+               .arg(vtkSpacing[0], 0, 'f', 6)
+               .arg(vtkSpacing[1], 0, 'f', 6)
+               .arg(vtkSpacing[2], 0, 'f', 6)
+               .arg(vtkOrigin[0], 0, 'f', 6)
+               .arg(vtkOrigin[1], 0, 'f', 6)
+               .arg(vtkOrigin[2], 0, 'f', 6)
+               .arg(reader->GetRescaleSlope(), 0, 'f', 6)
+               .arg(reader->GetRescaleIntercept(), 0, 'f', 6);
+    qCInfo(lcStudyLoadDiagnostics).noquote() << QStringLiteral("[NIFTI] vtk-direction=%1").arg(formatVtkDirection(vtkImage));
+}
+
 vtkSmartPointer<vtkPolyData> loadModelPolyData(const QString &filePath)
 {
     const QString suffix = QFileInfo(filePath).suffix().toLower();
@@ -403,30 +557,14 @@ void loadDicomData(const QString &dicomPath,
         connector->Update();
 
         auto *connectorOutput = connector->GetOutput();
-        if (connectorOutput == nullptr) {
-            result->errorMessage = QStringLiteral("VTK 转换失败，未生成影像数据: %1").arg(dicomPath);
+        vtkSmartPointer<vtkImageData> persistentImageData;
+        if (!buildPersistentImageData(connectorOutput,
+                                      dicomPath,
+                                      QStringLiteral("DICOM 序列"),
+                                      &persistentImageData,
+                                      &result->errorMessage)) {
             return;
         }
-
-        int extent[6] { 0, -1, 0, -1, 0, -1 };
-        connectorOutput->GetExtent(extent);
-        if (extent[0] > extent[1] || extent[2] > extent[3] || extent[4] > extent[5]) {
-            result->errorMessage = QStringLiteral("DICOM 序列维度无效，无法显示: %1").arg(dicomPath);
-            return;
-        }
-
-        auto *scalars = connectorOutput->GetPointData() != nullptr
-            ? connectorOutput->GetPointData()->GetScalars()
-            : nullptr;
-        if (scalars == nullptr) {
-            result->errorMessage = QStringLiteral("DICOM 序列没有可显示的像素标量数据: %1").arg(dicomPath);
-            return;
-        }
-
-        auto persistentImageData = vtkSmartPointer<vtkImageData>::New();
-        // 这里必须做深拷贝。connector 输出依赖当前 ITK/VTK 桥接管线的生命周期，
-        // 直接浅拷贝会让后续 MPR 重切片访问到已经失效的体数据缓冲区。
-        persistentImageData->DeepCopy(connectorOutput);
         applyItkDirectionToVtkImage(reader->GetOutput(), persistentImageData);
         persistentImageData->Modified();
 
@@ -443,6 +581,62 @@ void loadDicomData(const QString &dicomPath,
         result->errorMessage = QStringLiteral("ITK/GDCM 读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
     } catch (const gdcm::Exception &ex) {
         result->errorMessage = QStringLiteral("GDCM 读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
+    } catch (const std::exception &ex) {
+        result->errorMessage = QStringLiteral("读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
+    }
+}
+
+void loadNiftiData(const QString &filePath,
+                   StudyLoadResult *result,
+                   const StudyLoadFeedback *feedback)
+{
+    if (result == nullptr || filePath.isEmpty()) {
+        return;
+    }
+
+    try {
+        if (isCancelled(feedback)) {
+            *result = cancelledResult();
+            return;
+        }
+
+        const QString nativeFilePath = QDir::toNativeSeparators(filePath);
+        const QByteArray utf8Path = nativeFilePath.toUtf8();
+        auto reader = vtkSmartPointer<vtkNIFTIImageReader>::New();
+        reader->SetFileName(utf8Path.constData());
+        if (reader->CanReadFile(utf8Path.constData()) == 0) {
+            result->errorMessage = QStringLiteral("不是可读取的 NIfTI 文件: %1").arg(nativeFilePath);
+            return;
+        }
+
+        reportProgress(feedback,
+                       QStringLiteral("正在读取 NIfTI 体数据...\n%1").arg(nativeFilePath),
+                       55);
+        reader->TimeAsVectorOff();
+        reader->Update();
+
+        if (isCancelled(feedback)) {
+            *result = cancelledResult();
+            return;
+        }
+
+        reportProgress(feedback, QStringLiteral("正在整理 NIfTI 空间方向与标量范围..."), 70);
+        vtkSmartPointer<vtkImageData> normalizedImageData = buildNiftiImageData(reader);
+
+        vtkSmartPointer<vtkImageData> persistentImageData;
+        if (!buildPersistentImageData(normalizedImageData,
+                                      nativeFilePath,
+                                      QStringLiteral("NIfTI 文件"),
+                                      &persistentImageData,
+                                      &result->errorMessage)) {
+            return;
+        }
+
+        result->windowLevelPreset = WindowLevelPresetData {};
+        result->imageData = persistentImageData;
+        if (lcStudyLoadDiagnostics().isInfoEnabled()) {
+            logNiftiOrientationDiagnostics(nativeFilePath, reader, result->imageData);
+        }
     } catch (const std::exception &ex) {
         result->errorMessage = QStringLiteral("读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
     }
@@ -505,8 +699,13 @@ StudyLoadResult StudyLoader::loadFromDirectory(const QString &rootPath, const St
 
         reportProgress(&feedback, QStringLiteral("已识别病例包结构，开始读取数据..."), 35);
 
-        if (!result.package.dicomPath.isEmpty()) {
+        if (result.package.hasDicomVolume()) {
             loadDicomData(result.package.dicomPath, result.package.dicomFiles, &result, &feedback);
+            if (result.cancelled || !result.errorMessage.isEmpty()) {
+                return result;
+            }
+        } else if (result.package.hasNiftiVolume()) {
+            loadNiftiData(result.package.niftiFilePath, &result, &feedback);
             if (result.cancelled || !result.errorMessage.isEmpty()) {
                 return result;
             }
@@ -527,5 +726,35 @@ StudyLoadResult StudyLoader::loadFromDirectory(const QString &rootPath, const St
         result.errorMessage = QStringLiteral("读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
     }
 
+    return result;
+}
+
+StudyLoadResult StudyLoader::loadFromFile(const QString &filePath, const StudyLoadFeedback &feedback)
+{
+    StudyLoadResult result;
+    const QFileInfo fileInfo(filePath);
+    if (!fileInfo.exists() || !fileInfo.isFile()) {
+        result.errorMessage = QStringLiteral("影像文件不存在: %1").arg(QDir::toNativeSeparators(filePath));
+        return result;
+    }
+
+    const QString absoluteFilePath = QDir::toNativeSeparators(fileInfo.absoluteFilePath());
+    reportProgress(&feedback,
+                   QStringLiteral("正在准备读取影像文件...\n%1").arg(absoluteFilePath),
+                   0);
+
+    if (!isNiftiFilePath(absoluteFilePath)) {
+        result.errorMessage = QStringLiteral("当前仅支持直接打开 NIfTI 文件（.nii / .nii.gz）: %1").arg(absoluteFilePath);
+        return result;
+    }
+
+    result.package.rootPath = absoluteFilePath;
+    result.package.niftiFilePath = absoluteFilePath;
+    loadNiftiData(absoluteFilePath, &result, &feedback);
+    if (result.cancelled || !result.errorMessage.isEmpty()) {
+        return result;
+    }
+
+    reportProgress(&feedback, QStringLiteral("影像文件加载完成。"), 100);
     return result;
 }

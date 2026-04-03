@@ -33,8 +33,14 @@ std::array<MprViewWidget *, 3> mprPanels(FourPaneContentWidget *contentPage)
 QString buildStudySummaryText(const StudyPackage &package)
 {
     QStringList summaryLines;
-    summaryLines << QStringLiteral("病例目录: %1").arg(package.rootPath);
-    summaryLines << QStringLiteral("DICOM: %1").arg(package.dicomFiles.size());
+    summaryLines << QStringLiteral("数据来源: %1").arg(package.rootPath);
+    if (package.hasDicomVolume()) {
+        summaryLines << QStringLiteral("DICOM: %1").arg(package.dicomFiles.size());
+    } else if (package.hasNiftiVolume()) {
+        summaryLines << QStringLiteral("NIfTI: %1").arg(package.niftiFilePath);
+    } else {
+        summaryLines << QStringLiteral("影像: 未发现");
+    }
     summaryLines << QStringLiteral("模型: %1").arg(package.modelFiles.size());
     if (!package.sceneFilePath.isEmpty()) {
         summaryLines << QStringLiteral("场景配置: %1").arg(package.sceneFilePath);
@@ -72,7 +78,7 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
     auto *sidebarPanel = m_contentPage->sidebarPanel();
 
     if (result.imageData != nullptr) {
-        m_hasDicomImage = true;
+        m_hasImageData = true;
         setCrosshairEnabled(false);
         m_imageData = result.imageData;
         if (result.windowLevelPreset.isValid) {
@@ -89,13 +95,13 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
             panel->setImageData(m_imageData);
         }
     } else {
-        m_hasDicomImage = false;
+        m_hasImageData = false;
         setCrosshairEnabled(false);
         m_imageData = nullptr;
-        const QString dicomText = QStringLiteral("未发现 DICOM 序列");
+        const QString imageText = QStringLiteral("未发现可显示的影像数据");
         for (MprViewWidget *panel : panels) {
             panel->clearRecommendedWindowLevel();
-            panel->clearView(dicomText);
+            panel->clearView(imageText);
         }
     }
 
@@ -127,8 +133,8 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
 
 void FourPaneViewer::showEmptyState()
 {
-    m_statePage->setState(QStringLiteral("未加载病例"),
-                          QStringLiteral("请选择一个病例包目录。加载成功后，这里会显示三视图 MPR 和 3D 模型。"));
+    m_statePage->setState(QStringLiteral("未加载数据"),
+                          QStringLiteral("请选择病例包目录或 NIfTI 影像文件。加载成功后，这里会显示三视图 MPR 和 3D 模型。"));
     m_rootLayout->setCurrentWidget(m_statePage);
 }
 
@@ -141,7 +147,7 @@ void FourPaneViewer::showLoadingState(const QString &message)
 void FourPaneViewer::showErrorState(const QString &message)
 {
     m_statePage->setState(QStringLiteral("加载失败"),
-                          message.isEmpty() ? QStringLiteral("病例包加载失败。") : message);
+                          message.isEmpty() ? QStringLiteral("数据加载失败。") : message);
     m_rootLayout->setCurrentWidget(m_statePage);
 }
 
@@ -175,11 +181,11 @@ void FourPaneViewer::ensureContentPage()
 
 void FourPaneViewer::setCrosshairEnabled(bool enabled)
 {
-    const bool actualEnabled = enabled && m_hasDicomImage;
+    const bool actualEnabled = enabled && m_hasImageData;
     m_crosshairEnabled = actualEnabled;
 
     if (m_contentPage != nullptr) {
-        m_contentPage->sidebarPanel()->setCrosshairState(m_hasDicomImage, actualEnabled);
+        m_contentPage->sidebarPanel()->setCrosshairState(m_hasImageData, actualEnabled);
     }
 
     for (MprViewWidget *panel : mprPanels(m_contentPage)) {

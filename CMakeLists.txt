@@ -63,6 +63,7 @@ set(MEDPRO_ITK_COMPONENTS
     ITKCommon
     ITKIOImageBase
     ITKIOGDCM
+    ITKIONIFTI
     ITKImageFunction
     ITKImageGrid
     ITKImageIntensity
@@ -338,6 +339,10 @@ add_executable(dicomviewer_logic_tests
     src/model/studypackage.h
     src/core/casepackagereader.h
     src/core/casepackagereader.cpp
+    src/core/runtime/studyloadfeedback.h
+    src/core/runtime/studyloadresult.h
+    src/core/studyloader.h
+    src/core/studyloader.cpp
     src/view/mprslicemath.h
     src/view/mprslicemath.cpp
 )

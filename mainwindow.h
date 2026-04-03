@@ -24,15 +24,16 @@ class MainWindow final : public QMainWindow
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
-    ~MainWindow() override = default;
+    ~MainWindow() override;
 
 private slots:
     void openStudyPackage();
+    void openImageFile();
     void handleStudyLoadFinished();
     void cancelStudyLoad();
 
 private:
-    void beginStudyLoad(const QString &rootPath);
+    void beginStudyLoad(const QString &sourcePath, bool sourceIsFile);
     void ensureLoadingDialog();
     void updateLoadingProgress(const QString &message, int percent);
     void createMenus();
@@ -42,6 +43,7 @@ private:
     FourPaneViewer *m_viewer;
     QLabel *m_statusLabel;
     QAction *m_openAction;
+    QAction *m_openImageAction;
     QFutureWatcher<StudyLoadResult> *m_loadWatcher;
     QDialog *m_loadingDialog;
     QLabel *m_loadingMessageLabel;

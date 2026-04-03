@@ -1,4 +1,5 @@
 #include "src/core/casepackagereader.h"
+#include "src/core/studyloader.h"
 #include "src/view/mprslicemath.h"
 
 #include <QCoreApplication>
@@ -6,6 +7,10 @@
 #include <QFile>
 #include <QIODevice>
 #include <QTemporaryDir>
+
+#include <itkImage.h>
+#include <itkImageFileWriter.h>
+#include <itkNiftiImageIO.h>
 
 #include <vtkImageData.h>
 #include <vtkSmartPointer.h>
@@ -32,6 +37,44 @@ void expect(bool condition, const QString &message)
 bool nearlyEqual(double lhs, double rhs, double epsilon = 1e-6)
 {
     return std::abs(lhs - rhs) <= epsilon;
+}
+
+void writeTestNiftiFile(const QString &filePath)
+{
+    using ImageType = itk::Image<short, 3>;
+
+    auto image = ImageType::New();
+    ImageType::IndexType start;
+    start.Fill(0);
+    ImageType::SizeType size;
+    size[0] = 2;
+    size[1] = 2;
+    size[2] = 2;
+
+    ImageType::RegionType region;
+    region.SetIndex(start);
+    region.SetSize(size);
+    image->SetRegions(region);
+    image->Allocate();
+    image->FillBuffer(42);
+
+    ImageType::SpacingType spacing;
+    spacing[0] = 1.0;
+    spacing[1] = 1.5;
+    spacing[2] = 2.0;
+    image->SetSpacing(spacing);
+
+    auto writer = itk::ImageFileWriter<ImageType>::New();
+    writer->SetImageIO(itk::NiftiImageIO::New());
+    writer->SetFileName(QDir::toNativeSeparators(filePath).toStdString());
+    writer->SetInput(image);
+    try {
+        writer->Update();
+    } catch (const itk::ExceptionObject &ex) {
+        fail(QStringLiteral("写入测试 NIfTI 文件失败: %1").arg(QString::fromLocal8Bit(ex.what())));
+    } catch (const std::exception &ex) {
+        fail(QStringLiteral("写入测试 NIfTI 文件失败: %1").arg(QString::fromLocal8Bit(ex.what())));
+    }
 }
 
 void testMprSliceMathRoundTrip()
@@ -110,6 +153,49 @@ void testCasePackageReaderMissingDirectory()
     expect(!package.isValid(), QStringLiteral("不存在的目录不应返回有效病例包。"));
     expect(!errorMessage.isEmpty(), QStringLiteral("不存在的目录应返回错误信息。"));
 }
+
+void testCasePackageReaderWithNiftiVolume()
+{
+    QTemporaryDir tempDir;
+    expect(tempDir.isValid(), QStringLiteral("无法创建 NIfTI 测试临时目录。"));
+
+    const QDir rootDir(tempDir.path());
+    expect(rootDir.mkpath(QStringLiteral("nifti")), QStringLiteral("无法创建 nifti 目录。"));
+
+    const QString niftiPath = rootDir.filePath(QStringLiteral("nifti/brain.nii.gz"));
+    writeTestNiftiFile(niftiPath);
+
+    CasePackageReader reader;
+    QString errorMessage;
+    const StudyPackage package = reader.readFromDirectory(tempDir.path(), &errorMessage, nullptr);
+
+    expect(errorMessage.isEmpty(), QStringLiteral("包含 NIfTI 影像的目录不应产生错误信息。"));
+    expect(package.isValid(), QStringLiteral("包含 NIfTI 影像的目录应被识别为有效病例包。"));
+    expect(package.hasNiftiVolume(), QStringLiteral("目录中的 NIfTI 影像应被识别。"));
+    expect(package.niftiFilePath.endsWith(QStringLiteral("brain.nii.gz")),
+           QStringLiteral("应当记录被识别到的 NIfTI 文件路径。"));
+    expect(package.dicomFiles.isEmpty(), QStringLiteral("该测试目录不应误识别出 DICOM 文件。"));
+}
+
+void testStudyLoaderWithUnicodeNiftiPath()
+{
+    QTemporaryDir tempDir;
+    expect(tempDir.isValid(), QStringLiteral("无法创建 Unicode NIfTI 测试临时目录。"));
+
+    const QDir rootDir(tempDir.path());
+    expect(rootDir.mkpath(QStringLiteral("中文目录")), QStringLiteral("无法创建中文测试目录。"));
+
+    const QString asciiNiftiPath = rootDir.filePath(QStringLiteral("ascii-source.nii"));
+    writeTestNiftiFile(asciiNiftiPath);
+
+    const QString niftiPath = rootDir.filePath(QStringLiteral("中文目录/lung.nii"));
+    expect(QFile::copy(asciiNiftiPath, niftiPath), QStringLiteral("无法复制测试 NIfTI 文件到中文目录。"));
+
+    const StudyLoadResult result = StudyLoader::loadFromFile(niftiPath);
+    expect(result.succeeded(), QStringLiteral("中文目录下的 NIfTI 文件应可直接加载，错误: %1").arg(result.errorMessage));
+    expect(result.imageData != nullptr, QStringLiteral("中文目录下的 NIfTI 文件应生成可显示影像。"));
+    expect(result.package.hasNiftiVolume(), QStringLiteral("StudyLoader 应记录直接打开的 NIfTI 文件。"));
+}
 }
 
 int main(int argc, char **argv)
@@ -119,6 +205,8 @@ int main(int argc, char **argv)
     testMprSliceMathRoundTrip();
     testCasePackageReaderWithModelAndMeta();
     testCasePackageReaderMissingDirectory();
+    testCasePackageReaderWithNiftiVolume();
+    testStudyLoaderWithUnicodeNiftiPath();
 
     std::cout << "logic tests passed" << std::endl;
     return 0;

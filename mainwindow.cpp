@@ -31,6 +31,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_viewer(new FourPaneViewer(this))
     , m_statusLabel(new QLabel(this))
     , m_openAction(nullptr)
+    , m_openImageAction(nullptr)
     , m_loadWatcher(new QFutureWatcher<StudyLoadResult>(this))
     , m_loadingDialog(nullptr)
     , m_loadingMessageLabel(nullptr)
@@ -48,6 +49,17 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle(QStringLiteral("Dicom Viewer Workstation"));
 }
 
+MainWindow::~MainWindow()
+{
+    ++m_activeLoadId;
+    if (m_loadCancelFlag != nullptr) {
+        m_loadCancelFlag->store(true);
+    }
+    if (m_loadWatcher != nullptr && m_loadWatcher->isRunning()) {
+        m_loadWatcher->waitForFinished();
+    }
+}
+
 void MainWindow::openStudyPackage()
 {
     if (m_loadWatcher->isRunning()) {
@@ -61,7 +73,25 @@ void MainWindow::openStudyPackage()
         return;
     }
 
-    beginStudyLoad(rootPath);
+    beginStudyLoad(rootPath, false);
+}
+
+void MainWindow::openImageFile()
+{
+    if (m_loadWatcher->isRunning()) {
+        return;
+    }
+
+    const QString filePath = QFileDialog::getOpenFileName(
+        this,
+        QStringLiteral("选择 NIfTI 影像文件"),
+        QString(),
+        QStringLiteral("NIfTI Files (*.nii *.nii.gz);;All Files (*.*)"));
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    beginStudyLoad(filePath, true);
 }
 
 void MainWindow::handleStudyLoadFinished()
@@ -71,6 +101,9 @@ void MainWindow::handleStudyLoadFinished()
     }
     if (m_openAction != nullptr) {
         m_openAction->setEnabled(true);
+    }
+    if (m_openImageAction != nullptr) {
+        m_openImageAction->setEnabled(true);
     }
 
     const StudyLoadResult result = m_loadWatcher->result();
@@ -98,7 +131,7 @@ void MainWindow::handleStudyLoadFinished()
     updateStatusBar(result.package);
 }
 
-void MainWindow::beginStudyLoad(const QString &rootPath)
+void MainWindow::beginStudyLoad(const QString &sourcePath, bool sourceIsFile)
 {
     ensureLoadingDialog();
     ++m_activeLoadId;
@@ -107,12 +140,18 @@ void MainWindow::beginStudyLoad(const QString &rootPath)
     if (m_openAction != nullptr) {
         m_openAction->setEnabled(false);
     }
-
-    if (!m_currentPackage.isValid()) {
-        m_viewer->showLoadingState(QStringLiteral("正在后台扫描目录并读取 DICOM/模型..."));
+    if (m_openImageAction != nullptr) {
+        m_openImageAction->setEnabled(false);
     }
 
-    updateLoadingProgress(QStringLiteral("正在准备加载病例目录...\n%1").arg(rootPath), 0);
+    if (!m_currentPackage.isValid()) {
+        m_viewer->showLoadingState(QStringLiteral("正在后台读取影像和模型数据..."));
+    }
+
+    const QString loadingSourceText = sourceIsFile
+        ? QStringLiteral("正在准备加载影像文件...\n%1").arg(sourcePath)
+        : QStringLiteral("正在准备加载病例目录...\n%1").arg(sourcePath);
+    updateLoadingProgress(loadingSourceText, 0);
     m_loadingCancelButton->setEnabled(true);
     m_loadingCancelButton->setText(QStringLiteral("取消"));
     m_loadingDialog->show();
@@ -142,8 +181,10 @@ void MainWindow::beginStudyLoad(const QString &rootPath)
                                   Qt::QueuedConnection);
     };
 
-    m_loadWatcher->setFuture(QtConcurrent::run([rootPath, feedback]() {
-        return StudyLoader::loadFromDirectory(rootPath, feedback);
+    m_loadWatcher->setFuture(QtConcurrent::run([sourcePath, sourceIsFile, feedback]() {
+        return sourceIsFile
+            ? StudyLoader::loadFromFile(sourcePath, feedback)
+            : StudyLoader::loadFromDirectory(sourcePath, feedback);
     }));
 }
 
@@ -154,7 +195,7 @@ void MainWindow::ensureLoadingDialog()
     }
 
     m_loadingDialog = new QDialog(this);
-    m_loadingDialog->setWindowTitle(QStringLiteral("正在加载病例包"));
+    m_loadingDialog->setWindowTitle(QStringLiteral("正在加载数据"));
     m_loadingDialog->setWindowModality(Qt::WindowModal);
     m_loadingDialog->setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint);
     m_loadingDialog->setMinimumWidth(420);
@@ -166,7 +207,7 @@ void MainWindow::ensureLoadingDialog()
     auto *titleLabel = new QLabel(QStringLiteral("正在后台处理，请稍候..."), m_loadingDialog);
     titleLabel->setStyleSheet(QStringLiteral("font-size: 12pt; font-weight: 700;"));
 
-    m_loadingMessageLabel = new QLabel(QStringLiteral("正在扫描病例目录并读取影像、模型数据..."), m_loadingDialog);
+    m_loadingMessageLabel = new QLabel(QStringLiteral("正在读取影像、模型数据..."), m_loadingDialog);
     m_loadingMessageLabel->setWordWrap(true);
 
     m_loadingProgressBar = new QProgressBar(m_loadingDialog);
@@ -210,8 +251,12 @@ void MainWindow::createMenus()
 {
     auto *fileMenu = menuBar()->addMenu(QStringLiteral("文件"));
 
-    m_openAction = new QAction(QStringLiteral("打开病例包"), this);
-    m_openAction->setShortcut(QKeySequence::Open);
+    m_openImageAction = new QAction(QStringLiteral("打开影像文件"), this);
+    m_openImageAction->setShortcut(QKeySequence::Open);
+    connect(m_openImageAction, &QAction::triggered, this, &MainWindow::openImageFile);
+    fileMenu->addAction(m_openImageAction);
+
+    m_openAction = new QAction(QStringLiteral("打开病例包目录"), this);
     connect(m_openAction, &QAction::triggered, this, &MainWindow::openStudyPackage);
     fileMenu->addAction(m_openAction);
 
@@ -230,9 +275,9 @@ void MainWindow::updateStatusBar(const StudyPackage &package)
     parts << QStringLiteral("ZLIB %1").arg(QString::fromLatin1(zlibVersion()));
 
     if (package.isValid()) {
-        parts << QStringLiteral("当前病例: %1").arg(package.rootPath);
+        parts << QStringLiteral("当前来源: %1").arg(package.rootPath);
     } else {
-        parts << QStringLiteral("当前病例: 未加载");
+        parts << QStringLiteral("当前来源: 未加载");
     }
 
     m_statusLabel->setText(parts.join(QStringLiteral(" | ")));
@@ -242,6 +287,6 @@ void MainWindow::showPackageError(const QString &message)
 {
     QMessageBox::warning(
         this,
-        QStringLiteral("无法加载病例包"),
-        message.isEmpty() ? QStringLiteral("病例包目录缺少可识别的数据。") : message);
+        QStringLiteral("无法加载数据"),
+        message.isEmpty() ? QStringLiteral("未找到可识别的影像或模型数据。") : message);
 }

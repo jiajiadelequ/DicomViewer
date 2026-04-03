@@ -34,7 +34,7 @@ private:
     ViewerStateWidget *m_statePage;
     FourPaneContentWidget *m_contentPage;
     vtkSmartPointer<vtkImageData> m_imageData;
-    bool m_hasDicomImage = false;
+    bool m_hasImageData = false;
     bool m_crosshairEnabled = false;
     bool m_syncingCrosshair = false;
     bool m_syncingWindowLevel = false;

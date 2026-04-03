@@ -8,4 +8,6 @@ class StudyLoader
 public:
     [[nodiscard]] static StudyLoadResult loadFromDirectory(const QString &rootPath,
                                                            const StudyLoadFeedback &feedback = StudyLoadFeedback {});
+    [[nodiscard]] static StudyLoadResult loadFromFile(const QString &filePath,
+                                                      const StudyLoadFeedback &feedback = StudyLoadFeedback {});
 };

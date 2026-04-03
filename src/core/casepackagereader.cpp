@@ -9,6 +9,7 @@
 #include <itkGDCMImageIO.h>
 #include <itkGDCMSeriesFileNames.h>
 
+#include <algorithm>
 #include <limits>
 #include <vector>
 
@@ -40,6 +41,18 @@ struct DicomDirectoryMatch
     [[nodiscard]] bool isValid() const
     {
         return !directoryPath.isEmpty() && fileCount > 0;
+    }
+};
+
+struct NiftiFileMatch
+{
+    QString filePath;
+    int depth = std::numeric_limits<int>::max();
+    bool preferredDirectory = false;
+
+    [[nodiscard]] bool isValid() const
+    {
+        return !filePath.isEmpty();
     }
 };
 
@@ -81,6 +94,7 @@ bool isKnownNonDicomFile(const QFileInfo &fileInfo)
 {
     static const QStringList suffixes {
         QStringLiteral("json"),
+        QStringLiteral("nii"),
         QStringLiteral("obj"),
         QStringLiteral("stl"),
         QStringLiteral("ply"),
@@ -198,6 +212,15 @@ int directoryDepth(const QDir &rootDir, const QString &directoryPath)
     return relativePath.split(QLatin1Char('/'), Qt::SkipEmptyParts).size();
 }
 
+bool hasPreferredNiftiDirectoryName(const QString &directoryPath)
+{
+    const QString name = QFileInfo(directoryPath).fileName();
+    return name.compare(QStringLiteral("nifti"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("nii"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("image"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("images"), Qt::CaseInsensitive) == 0;
+}
+
 QStringList candidateDirectories(const QDir &rootDir)
 {
     QStringList results;
@@ -286,6 +309,30 @@ bool isBetterDicomMatch(const DicomDirectoryMatch &candidate, const DicomDirecto
     return QString::compare(candidate.directoryPath, currentBest.directoryPath, Qt::CaseInsensitive) < 0;
 }
 
+bool isBetterNiftiMatch(const NiftiFileMatch &candidate, const NiftiFileMatch &currentBest)
+{
+    if (!currentBest.isValid()) {
+        return candidate.isValid();
+    }
+
+    if (candidate.preferredDirectory != currentBest.preferredDirectory) {
+        return candidate.preferredDirectory;
+    }
+
+    if (candidate.depth != currentBest.depth) {
+        return candidate.depth < currentBest.depth;
+    }
+
+    return QString::compare(candidate.filePath, currentBest.filePath, Qt::CaseInsensitive) < 0;
+}
+
+bool isLikelyNiftiFile(const QFileInfo &fileInfo)
+{
+    const QString fileName = fileInfo.fileName().toLower();
+    return fileName.endsWith(QStringLiteral(".nii"))
+        || fileName.endsWith(QStringLiteral(".nii.gz"));
+}
+
 DicomDirectoryMatch inspectDicomDirectory(const QDir &rootDir,
                                          const QString &directoryPath,
                                          DicomImageIOType *probeImageIO,
@@ -363,6 +410,89 @@ DicomDirectoryMatch resolveDicomDirectory(const QDir &rootDir, const StudyLoadFe
 
     return bestMatch;
 }
+
+NiftiFileMatch inspectNiftiDirectory(const QDir &rootDir,
+                                    const QString &directoryPath,
+                                    const StudyLoadFeedback *feedback)
+{
+    NiftiFileMatch bestMatch;
+    if (directoryPath.isEmpty() || isCancelled(feedback)) {
+        return bestMatch;
+    }
+
+    const QDir directory(directoryPath);
+    const QFileInfoList files = directory.entryInfoList({QStringLiteral("*.nii"), QStringLiteral("*.nii.gz")},
+                                                        QDir::Files | QDir::Readable | QDir::NoSymLinks,
+                                                        QDir::Name | QDir::IgnoreCase);
+    for (const QFileInfo &fileInfo : files) {
+        if (!isLikelyNiftiFile(fileInfo)) {
+            continue;
+        }
+
+        NiftiFileMatch candidate;
+        candidate.filePath = QDir::toNativeSeparators(fileInfo.absoluteFilePath());
+        candidate.depth = directoryDepth(rootDir, directoryPath);
+        candidate.preferredDirectory = hasPreferredNiftiDirectoryName(directoryPath);
+        if (isBetterNiftiMatch(candidate, bestMatch)) {
+            bestMatch = candidate;
+        }
+    }
+
+    return bestMatch;
+}
+
+NiftiFileMatch resolveNiftiFile(const QDir &rootDir, const StudyLoadFeedback *feedback)
+{
+    NiftiFileMatch bestMatch;
+    const QString rootPath = QDir::toNativeSeparators(rootDir.absolutePath());
+    const QString preferredPath = findChildDirectory(rootDir, {
+        QStringLiteral("nifti"),
+        QStringLiteral("nii"),
+        QStringLiteral("image"),
+        QStringLiteral("images")
+    });
+
+    reportProgress(feedback, QStringLiteral("正在扫描病例目录中的 NIfTI 文件..."), 30);
+
+    if (!preferredPath.isEmpty()) {
+        const NiftiFileMatch preferredMatch = inspectNiftiDirectory(rootDir, preferredPath, feedback);
+        if (preferredMatch.isValid() || isCancelled(feedback)) {
+            return preferredMatch;
+        }
+    }
+
+    const NiftiFileMatch rootMatch = inspectNiftiDirectory(rootDir, rootPath, feedback);
+    if (rootMatch.isValid() || isCancelled(feedback)) {
+        return rootMatch;
+    }
+
+    const QStringList directories = candidateDirectories(rootDir);
+    const int totalCandidates = std::max(1, directories.size());
+    int scannedCandidateCount = 0;
+    for (const QString &directoryPath : directories) {
+        if (sameDirectoryPath(directoryPath, rootPath)
+            || (!preferredPath.isEmpty() && sameDirectoryPath(directoryPath, preferredPath))) {
+            continue;
+        }
+
+        if (isCancelled(feedback)) {
+            return {};
+        }
+
+        ++scannedCandidateCount;
+        const int percent = 30 + static_cast<int>((5.0 * scannedCandidateCount) / totalCandidates);
+        reportProgress(feedback,
+                       QStringLiteral("正在扫描 NIfTI 候选目录...\n%1").arg(directoryPath),
+                       percent);
+
+        const NiftiFileMatch candidate = inspectNiftiDirectory(rootDir, directoryPath, feedback);
+        if (isBetterNiftiMatch(candidate, bestMatch)) {
+            bestMatch = candidate;
+        }
+    }
+
+    return bestMatch;
+}
 }
 
 StudyPackage CasePackageReader::readFromDirectory(const QString &rootPath,
@@ -386,15 +516,24 @@ StudyPackage CasePackageReader::readFromDirectory(const QString &rootPath,
     if (isCancelled(feedback)) {
         return package;
     }
+    const NiftiFileMatch niftiMatch = dicomMatch.isValid() ? NiftiFileMatch {} : resolveNiftiFile(rootDir, feedback);
+    if (isCancelled(feedback)) {
+        return package;
+    }
 
     reportProgress(feedback, QStringLiteral("正在整理病例目录中的模型和场景文件..."), 35);
     const QString modelPath = findChildDirectory(rootDir, {QStringLiteral("model"), QStringLiteral("models")});
     const QString metaPath = findChildDirectory(rootDir, {QStringLiteral("meta")});
-    const QString sceneFilePath = QDir(metaPath).filePath(QStringLiteral("scene.json"));
+    const QString sceneFilePath = metaPath.isEmpty()
+        ? QString()
+        : QDir(metaPath).filePath(QStringLiteral("scene.json"));
 
     if (dicomMatch.isValid()) {
         package.dicomPath = QDir::toNativeSeparators(dicomMatch.directoryPath);
         package.dicomFiles = dicomMatch.files;
+    }
+    if (niftiMatch.isValid()) {
+        package.niftiFilePath = niftiMatch.filePath;
     }
 
     if (QFileInfo::exists(modelPath) && QFileInfo(modelPath).isDir()) {
@@ -417,7 +556,7 @@ StudyPackage CasePackageReader::readFromDirectory(const QString &rootPath,
     }
 
     if (!package.isValid() && errorMessage != nullptr) {
-        *errorMessage = QStringLiteral("未在目录中找到可识别的数据。请选择任意包含 DICOM 序列的目录，或包含 dicom/、model/ 子目录的病例目录。");
+        *errorMessage = QStringLiteral("未在目录中找到可识别的数据。请选择包含 DICOM 序列、NIfTI 文件，或包含 dicom/、model/ 子目录的病例目录。");
     }
 
     return package;
