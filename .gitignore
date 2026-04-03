@@ -81,7 +81,9 @@ CMakeLists.txt.user*
 /VTK
 /VTK*
 /third_party
+/release-slim
 /MedproViewer_Build
+/.vs/
 /.vs/CMake Overview
 /.vs/MedproViewer/config/applicationhost.config
 /.vs/MedproViewer/v16/Browse.VC.db-shm
