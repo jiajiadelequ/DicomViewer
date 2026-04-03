@@ -81,6 +81,31 @@ QStringList collectFiles(const QString &directoryPath, const QStringList &filter
     return results;
 }
 
+QStringList modelFileFilters()
+{
+    return {
+        QStringLiteral("*.stl"),
+        QStringLiteral("*.obj"),
+        QStringLiteral("*.ply"),
+        QStringLiteral("*.vtp"),
+        QStringLiteral("*.vtk")
+    };
+}
+
+QStringList collectTopLevelFiles(const QString &directoryPath, const QStringList &filters)
+{
+    QStringList results;
+    const QDir directory(directoryPath);
+    const QFileInfoList files = directory.entryInfoList(filters,
+                                                        QDir::Files | QDir::Readable | QDir::NoSymLinks,
+                                                        QDir::Name | QDir::IgnoreCase);
+    results.reserve(files.size());
+    for (const QFileInfo &fileInfo : files) {
+        results.append(QDir::toNativeSeparators(fileInfo.absoluteFilePath()));
+    }
+    return results;
+}
+
 bool isLikelyDicomByName(const QFileInfo &fileInfo)
 {
     const QString suffix = fileInfo.suffix().toLower();
@@ -538,13 +563,14 @@ StudyPackage CasePackageReader::readFromDirectory(const QString &rootPath,
 
     if (QFileInfo::exists(modelPath) && QFileInfo(modelPath).isDir()) {
         package.modelPath = QDir::toNativeSeparators(modelPath);
-        package.modelFiles = collectFiles(modelPath, {
-            QStringLiteral("*.stl"),
-            QStringLiteral("*.obj"),
-            QStringLiteral("*.ply"),
-            QStringLiteral("*.vtp"),
-            QStringLiteral("*.vtk")
-        });
+        package.modelFiles = collectFiles(modelPath, modelFileFilters());
+    }
+
+    if (package.modelFiles.isEmpty()) {
+        package.modelFiles = collectTopLevelFiles(package.rootPath, modelFileFilters());
+        if (!package.modelFiles.isEmpty()) {
+            package.modelPath = package.rootPath;
+        }
     }
 
     if (QFileInfo::exists(metaPath) && QFileInfo(metaPath).isDir()) {
@@ -556,7 +582,7 @@ StudyPackage CasePackageReader::readFromDirectory(const QString &rootPath,
     }
 
     if (!package.isValid() && errorMessage != nullptr) {
-        *errorMessage = QStringLiteral("未在目录中找到可识别的数据。请选择包含 DICOM 序列、NIfTI 文件，或包含 dicom/、model/ 子目录的病例目录。");
+        *errorMessage = QStringLiteral("未在目录中找到可识别的数据。请选择包含 DICOM 序列、NIfTI 文件、根目录模型文件，或包含 dicom/、model/ 子目录的病例目录。");
     }
 
     return package;

@@ -13,6 +13,7 @@
 #include <vtkImageShiftScale.h>
 #include <vtkMatrix3x3.h>
 #include <vtkMatrix4x4.h>
+#include <vtkNIFTIImageHeader.h>
 #include <vtkNIFTIImageReader.h>
 #include <vtkOBJReader.h>
 #include <vtkPLYReader.h>
@@ -127,6 +128,33 @@ void applyItkDirectionToVtkImage(VolumeImageType *itkImage, vtkImageData *vtkIma
     vtkImage->SetDirectionMatrix(directionMatrix);
 }
 
+vtkSmartPointer<vtkMatrix4x4> buildNiftiInternalMatrix(vtkNIFTIImageReader *reader)
+{
+    if (reader == nullptr) {
+        return nullptr;
+    }
+
+    vtkMatrix4x4 *niftiMatrix = reader->GetSFormMatrix();
+    if (niftiMatrix == nullptr) {
+        niftiMatrix = reader->GetQFormMatrix();
+    }
+    if (niftiMatrix == nullptr) {
+        return nullptr;
+    }
+
+    // vtkNIFTIImageReader reports NIfTI physical space in RAS.
+    // The rest of this viewer uses the ITK/DICOM-style internal volume contract,
+    // i.e. physical coordinates encoded directly on vtkImageData in LPS.
+    auto rasToLps = vtkSmartPointer<vtkMatrix4x4>::New();
+    rasToLps->Identity();
+    rasToLps->SetElement(0, 0, -1.0);
+    rasToLps->SetElement(1, 1, -1.0);
+
+    auto internalMatrix = vtkSmartPointer<vtkMatrix4x4>::New();
+    vtkMatrix4x4::Multiply4x4(rasToLps, niftiMatrix, internalMatrix);
+    return internalMatrix;
+}
+
 bool buildPersistentImageData(vtkImageData *vtkImage,
                               const QString &sourcePath,
                               const QString &sourceLabel,
@@ -171,31 +199,23 @@ bool buildPersistentImageData(vtkImageData *vtkImage,
     return true;
 }
 
-void applyNiftiOrientation(vtkNIFTIImageReader *reader, vtkImageData *vtkImage)
+void applyNiftiPhysicalSpace(vtkMatrix4x4 *physicalMatrix, vtkImageData *vtkImage)
 {
-    if (reader == nullptr || vtkImage == nullptr) {
-        return;
-    }
-
-    vtkMatrix4x4 *orientationMatrix = reader->GetSFormMatrix();
-    if (orientationMatrix == nullptr) {
-        orientationMatrix = reader->GetQFormMatrix();
-    }
-    if (orientationMatrix == nullptr) {
+    if (physicalMatrix == nullptr || vtkImage == nullptr) {
         return;
     }
 
     auto directionMatrix = vtkSmartPointer<vtkMatrix3x3>::New();
     for (int row = 0; row < 3; ++row) {
         for (int column = 0; column < 3; ++column) {
-            directionMatrix->SetElement(row, column, orientationMatrix->GetElement(row, column));
+            directionMatrix->SetElement(row, column, physicalMatrix->GetElement(row, column));
         }
     }
 
     vtkImage->SetDirectionMatrix(directionMatrix);
-    vtkImage->SetOrigin(orientationMatrix->GetElement(0, 3),
-                        orientationMatrix->GetElement(1, 3),
-                        orientationMatrix->GetElement(2, 3));
+    vtkImage->SetOrigin(physicalMatrix->GetElement(0, 3),
+                        physicalMatrix->GetElement(1, 3),
+                        physicalMatrix->GetElement(2, 3));
 }
 
 vtkSmartPointer<vtkImageData> buildNiftiImageData(vtkNIFTIImageReader *reader)
@@ -206,7 +226,7 @@ vtkSmartPointer<vtkImageData> buildNiftiImageData(vtkNIFTIImageReader *reader)
 
     auto orientedImage = vtkSmartPointer<vtkImageData>::New();
     orientedImage->DeepCopy(reader->GetOutput());
-    applyNiftiOrientation(reader, orientedImage);
+    applyNiftiPhysicalSpace(buildNiftiInternalMatrix(reader), orientedImage);
 
     const double slope = reader->GetRescaleSlope();
     const double intercept = reader->GetRescaleIntercept();
@@ -225,9 +245,30 @@ vtkSmartPointer<vtkImageData> buildNiftiImageData(vtkNIFTIImageReader *reader)
 
     auto rescaledImage = vtkSmartPointer<vtkImageData>::New();
     rescaledImage->DeepCopy(shiftScale->GetOutput());
-    applyNiftiOrientation(reader, rescaledImage);
+    applyNiftiPhysicalSpace(buildNiftiInternalMatrix(reader), rescaledImage);
     rescaledImage->Modified();
     return rescaledImage;
+}
+
+WindowLevelPresetData readNiftiWindowLevelPreset(vtkNIFTIImageReader *reader)
+{
+    WindowLevelPresetData preset;
+    auto *header = reader != nullptr ? reader->GetNIFTIHeader() : nullptr;
+    if (header == nullptr) {
+        return preset;
+    }
+
+    const double calMin = header->GetCalMin();
+    const double calMax = header->GetCalMax();
+    if (!std::isfinite(calMin) || !std::isfinite(calMax) || calMax <= calMin) {
+        return preset;
+    }
+
+    preset.window = calMax - calMin;
+    preset.level = 0.5 * (calMin + calMax);
+    preset.explanation = QStringLiteral("NIfTI cal_min/cal_max");
+    preset.isValid = true;
+    return preset;
 }
 
 bool parseFirstDicomDecimal(const QString &rawValue, double *parsedValue)
@@ -426,7 +467,8 @@ void logOrientationDiagnostics(const QString &dicomPath,
 
 void logNiftiOrientationDiagnostics(const QString &filePath,
                                     vtkNIFTIImageReader *reader,
-                                    vtkImageData *vtkImage)
+                                    vtkImageData *vtkImage,
+                                    const WindowLevelPresetData &preset)
 {
     if (reader == nullptr || vtkImage == nullptr) {
         return;
@@ -457,36 +499,46 @@ void logNiftiOrientationDiagnostics(const QString &filePath,
                .arg(reader->GetRescaleSlope(), 0, 'f', 6)
                .arg(reader->GetRescaleIntercept(), 0, 'f', 6);
     qCInfo(lcStudyLoadDiagnostics).noquote() << QStringLiteral("[NIFTI] vtk-direction=%1").arg(formatVtkDirection(vtkImage));
+    auto *header = reader->GetNIFTIHeader();
+    qCInfo(lcStudyLoadDiagnostics).noquote()
+        << QStringLiteral("[NIFTI] cal-min=%1 cal-max=%2 initial-window=%3 initial-level=%4 preset=%5")
+               .arg(header != nullptr ? QString::number(header->GetCalMin(), 'f', 6) : QStringLiteral("<missing>"))
+               .arg(header != nullptr ? QString::number(header->GetCalMax(), 'f', 6) : QStringLiteral("<missing>"))
+               .arg(preset.isValid ? QString::number(preset.window, 'f', 6) : QStringLiteral("<auto>"))
+               .arg(preset.isValid ? QString::number(preset.level, 'f', 6) : QStringLiteral("<auto>"))
+               .arg(preset.explanation.isEmpty() ? QStringLiteral("<none>") : preset.explanation);
 }
 
 vtkSmartPointer<vtkPolyData> loadModelPolyData(const QString &filePath)
 {
+    const QString nativeFilePath = QDir::toNativeSeparators(filePath);
+    const QByteArray utf8Path = nativeFilePath.toUtf8();
     const QString suffix = QFileInfo(filePath).suffix().toLower();
     vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
 
     if (suffix == QStringLiteral("stl")) {
         auto reader = vtkSmartPointer<vtkSTLReader>::New();
-        reader->SetFileName(filePath.toStdString().c_str());
+        reader->SetFileName(utf8Path.constData());
         reader->Update();
         polyData->DeepCopy(reader->GetOutput());
     } else if (suffix == QStringLiteral("obj")) {
         auto reader = vtkSmartPointer<vtkOBJReader>::New();
-        reader->SetFileName(filePath.toStdString().c_str());
+        reader->SetFileName(utf8Path.constData());
         reader->Update();
         polyData->DeepCopy(reader->GetOutput());
     } else if (suffix == QStringLiteral("ply")) {
         auto reader = vtkSmartPointer<vtkPLYReader>::New();
-        reader->SetFileName(filePath.toStdString().c_str());
+        reader->SetFileName(utf8Path.constData());
         reader->Update();
         polyData->DeepCopy(reader->GetOutput());
     } else if (suffix == QStringLiteral("vtp")) {
         auto reader = vtkSmartPointer<vtkXMLPolyDataReader>::New();
-        reader->SetFileName(filePath.toStdString().c_str());
+        reader->SetFileName(utf8Path.constData());
         reader->Update();
         polyData->DeepCopy(reader->GetOutput());
     } else if (suffix == QStringLiteral("vtk")) {
         auto reader = vtkSmartPointer<vtkPolyDataReader>::New();
-        reader->SetFileName(filePath.toStdString().c_str());
+        reader->SetFileName(utf8Path.constData());
         reader->Update();
         polyData->DeepCopy(reader->GetOutput());
     } else {
@@ -632,10 +684,10 @@ void loadNiftiData(const QString &filePath,
             return;
         }
 
-        result->windowLevelPreset = WindowLevelPresetData {};
+        result->windowLevelPreset = readNiftiWindowLevelPreset(reader);
         result->imageData = persistentImageData;
         if (lcStudyLoadDiagnostics().isInfoEnabled()) {
-            logNiftiOrientationDiagnostics(nativeFilePath, reader, result->imageData);
+            logNiftiOrientationDiagnostics(nativeFilePath, reader, result->imageData, result->windowLevelPreset);
         }
     } catch (const std::exception &ex) {
         result->errorMessage = QStringLiteral("读取失败: %1").arg(QString::fromLocal8Bit(ex.what()));
@@ -739,6 +791,7 @@ StudyLoadResult StudyLoader::loadFromFile(const QString &filePath, const StudyLo
     }
 
     const QString absoluteFilePath = QDir::toNativeSeparators(fileInfo.absoluteFilePath());
+    const QString packageRootPath = QDir::toNativeSeparators(fileInfo.absolutePath());
     reportProgress(&feedback,
                    QStringLiteral("正在准备读取影像文件...\n%1").arg(absoluteFilePath),
                    0);
@@ -748,11 +801,31 @@ StudyLoadResult StudyLoader::loadFromFile(const QString &filePath, const StudyLo
         return result;
     }
 
-    result.package.rootPath = absoluteFilePath;
+    reportProgress(&feedback,
+                   QStringLiteral("正在扫描同目录中的模型和场景文件...\n%1").arg(packageRootPath),
+                   15);
+
+    CasePackageReader packageReader;
+    QString ignoredPackageError;
+    result.package = packageReader.readFromDirectory(packageRootPath, &ignoredPackageError, &feedback);
+    if (isCancelled(&feedback)) {
+        return cancelledResult();
+    }
+
+    result.package.rootPath = packageRootPath;
+    result.package.dicomPath.clear();
+    result.package.dicomFiles.clear();
     result.package.niftiFilePath = absoluteFilePath;
     loadNiftiData(absoluteFilePath, &result, &feedback);
     if (result.cancelled || !result.errorMessage.isEmpty()) {
         return result;
+    }
+
+    if (!result.package.modelFiles.isEmpty()) {
+        loadModelData(result.package.modelFiles, &result, &feedback);
+        if (result.cancelled) {
+            return result;
+        }
     }
 
     reportProgress(&feedback, QStringLiteral("影像文件加载完成。"), 100);
