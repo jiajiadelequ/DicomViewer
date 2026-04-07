@@ -16,6 +16,7 @@
 #include <QPushButton>
 #include <QPointer>
 #include <QProgressBar>
+#include <QSettings>
 #include <QStatusBar>
 #include <QStringList>
 #include <QVBoxLayout>
@@ -61,6 +62,24 @@ MainWindow::~MainWindow()
     }
 }
 
+namespace
+{
+QString lastOpenDirectory()
+{
+    QSettings settings;
+    return settings.value(QStringLiteral("paths/lastOpenDirectory")).toString();
+}
+
+void rememberLastOpenDirectory(const QString &path)
+{
+    if (path.isEmpty()) {
+        return;
+    }
+    QSettings settings;
+    settings.setValue(QStringLiteral("paths/lastOpenDirectory"), path);
+}
+}
+
 void MainWindow::openStudyPackage()
 {
     if (m_loadWatcher->isRunning()) {
@@ -69,11 +88,13 @@ void MainWindow::openStudyPackage()
 
     const QString rootPath = QFileDialog::getExistingDirectory(
         this,
-        QStringLiteral("选择病例包目录"));
+        QStringLiteral("选择病例包目录"),
+        lastOpenDirectory());
     if (rootPath.isEmpty()) {
         return;
     }
 
+    rememberLastOpenDirectory(rootPath);
     beginStudyLoad(rootPath, false);
 }
 
@@ -86,12 +107,13 @@ void MainWindow::openImageFile()
     const QString filePath = QFileDialog::getOpenFileName(
         this,
         QStringLiteral("选择 NIfTI 影像文件"),
-        QString(),
+        lastOpenDirectory(),
         QStringLiteral("NIfTI Files (*.nii *.nii.gz);;All Files (*.*)"));
     if (filePath.isEmpty()) {
         return;
     }
 
+    rememberLastOpenDirectory(QFileInfo(filePath).absolutePath());
     beginStudyLoad(filePath, true);
 }
 

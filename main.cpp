@@ -9,6 +9,8 @@ int main(int argc, char *argv[])
     QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
 
     QApplication app(argc, argv);
+    QApplication::setOrganizationName(QStringLiteral("DicomViewer"));
+    QApplication::setApplicationName(QStringLiteral("DicomViewerSkeleton"));
 
     MainWindow window;
     window.show();
