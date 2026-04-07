@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/core/runtime/studyloadresult.h"
+
 #include <array>
 #include <memory>
 
@@ -30,7 +32,7 @@ public:
     void beginSceneBatch(const QString &message);
     void endSceneBatch(const QString &message);
     void clearScene(const QString &message);
-    void addModelData(const QString &filePath, vtkPolyData *polyData);
+    void addModelData(const QString &filePath, vtkPolyData *polyData, const LoadedModelData::MaterialData &material);
     void setModelVisibility(int index, bool visible);
     void setReferenceImageData(vtkImageData *imageData);
     void setCrosshairEnabled(bool enabled);

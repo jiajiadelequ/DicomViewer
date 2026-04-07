@@ -18,8 +18,19 @@ struct WindowLevelPresetData
 
 struct LoadedModelData
 {
+    struct MaterialData
+    {
+        double color[3] = { 0.85, 0.85, 0.85 };
+        double opacity = 1.0;
+        double specularColor[3] = { 1.0, 1.0, 1.0 };
+        double specularStrength = 0.0;
+        double specularPower = 1.0;
+        bool hasMaterial = false;
+    };
+
     QString filePath;
     vtkSmartPointer<vtkPolyData> polyData;
+    MaterialData material;
 };
 
 struct StudyLoadResult

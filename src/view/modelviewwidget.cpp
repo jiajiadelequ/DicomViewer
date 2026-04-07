@@ -85,7 +85,9 @@ void ModelViewWidget::clearScene(const QString &message)
     queueSceneUpdate(false);
 }
 
-void ModelViewWidget::addModelData(const QString &filePath, vtkPolyData *polyData)
+void ModelViewWidget::addModelData(const QString &filePath,
+                                   vtkPolyData *polyData,
+                                   const LoadedModelData::MaterialData &material)
 {
     if (polyData == nullptr || (polyData->GetNumberOfPoints() <= 0 && polyData->GetNumberOfCells() <= 0)) {
         return;
@@ -98,7 +100,15 @@ void ModelViewWidget::addModelData(const QString &filePath, vtkPolyData *polyDat
 
     auto actor = vtkSmartPointer<vtkActor>::New();
     actor->SetMapper(mapper);
-    actor->GetProperty()->SetOpacity(1.0);
+    actor->GetProperty()->SetOpacity(material.hasMaterial ? material.opacity : 1.0);
+    if (material.hasMaterial) {
+        actor->GetProperty()->SetColor(material.color[0], material.color[1], material.color[2]);
+        actor->GetProperty()->SetSpecularColor(material.specularColor[0],
+                                               material.specularColor[1],
+                                               material.specularColor[2]);
+        actor->GetProperty()->SetSpecular(material.specularStrength);
+        actor->GetProperty()->SetSpecularPower(material.specularPower);
+    }
 
     m_crosshairController->addModelActor(actor, polyData);
     m_crosshairController->updateGeometry();

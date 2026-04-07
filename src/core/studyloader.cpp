@@ -4,8 +4,12 @@
 
 #include <QDebug>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QLoggingCategory>
+#include <QRegularExpression>
+#include <QTemporaryFile>
+#include <QTextStream>
 #include <gdcmException.h>
 #include <QStringList>
 
@@ -31,6 +35,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 namespace
@@ -74,6 +79,218 @@ bool isNiftiFilePath(const QString &filePath)
 bool nearlyEqual(double lhs, double rhs, double epsilon = 1e-8)
 {
     return std::abs(lhs - rhs) <= epsilon;
+}
+
+struct ObjMaterialReference
+{
+    QString mtllibPath;
+    QString materialName;
+    bool requiresSanitizedLoad = false;
+};
+
+ObjMaterialReference inspectObjMaterialReference(const QString &objPath)
+{
+    ObjMaterialReference reference;
+    QFile file(objPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return reference;
+    }
+
+    QTextStream stream(&file);
+    const QDir baseDir = QFileInfo(objPath).absoluteDir();
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine().trimmed();
+        if (line.startsWith(QStringLiteral("mtllib "))) {
+            if (reference.mtllibPath.isEmpty()) {
+                const QString relativePath = line.mid(7).trimmed();
+                if (!relativePath.isEmpty()) {
+                    reference.mtllibPath = QDir::toNativeSeparators(baseDir.filePath(relativePath));
+                }
+            }
+            reference.requiresSanitizedLoad = true;
+        } else if (line.startsWith(QStringLiteral("usemtl "))) {
+            if (reference.materialName.isEmpty()) {
+                reference.materialName = line.mid(7).trimmed();
+            }
+            reference.requiresSanitizedLoad = true;
+        }
+    }
+    return reference;
+}
+
+bool writeSanitizedObjFile(const QString &objPath, QTemporaryFile *temporaryFile)
+{
+    if (temporaryFile == nullptr) {
+        return false;
+    }
+
+    QFile file(objPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return false;
+    }
+
+    QTextStream input(&file);
+    QTextStream output(temporaryFile);
+    while (!input.atEnd()) {
+        const QString line = input.readLine();
+        if (line.startsWith(QStringLiteral("mtllib "))) {
+            continue;
+        }
+        if (line.startsWith(QStringLiteral("usemtl "))) {
+            continue;
+        }
+        output << line << '\n';
+    }
+    output.flush();
+    temporaryFile->flush();
+    return temporaryFile->error() == QFileDevice::NoError;
+}
+
+LoadedModelData::MaterialData parseMtlMaterial(const QString &mtlPath, const QString &targetMaterialName)
+{
+    LoadedModelData::MaterialData material;
+    if (mtlPath.isEmpty()) {
+        return material;
+    }
+
+    QFile file(mtlPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return material;
+    }
+
+    QTextStream stream(&file);
+    QString currentMaterialName;
+    bool inTargetBlock = false;
+    bool seenAnyMaterial = false;
+
+    auto matchesTarget = [&targetMaterialName](const QString &name) {
+        return targetMaterialName.isEmpty() || name == targetMaterialName;
+    };
+
+    while (!stream.atEnd()) {
+        const QString rawLine = stream.readLine().trimmed();
+        if (rawLine.isEmpty() || rawLine.startsWith(QLatin1Char('#'))) {
+            continue;
+        }
+
+        const QStringList parts = rawLine.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+        if (parts.isEmpty()) {
+            continue;
+        }
+
+        const QString keyword = parts.front();
+        if (keyword == QStringLiteral("newmtl")) {
+            currentMaterialName = rawLine.mid(6).trimmed();
+            inTargetBlock = matchesTarget(currentMaterialName);
+            seenAnyMaterial = true;
+            if (!targetMaterialName.isEmpty() && material.hasMaterial && !inTargetBlock) {
+                break;
+            }
+            continue;
+        }
+
+        if (!inTargetBlock) {
+            continue;
+        }
+
+        if ((keyword == QStringLiteral("Kd") || keyword == QStringLiteral("Ka")) && parts.size() >= 4) {
+            material.color[0] = parts[1].toDouble();
+            material.color[1] = parts[2].toDouble();
+            material.color[2] = parts[3].toDouble();
+            material.hasMaterial = true;
+        } else if (keyword == QStringLiteral("Ks") && parts.size() >= 4) {
+            material.specularColor[0] = parts[1].toDouble();
+            material.specularColor[1] = parts[2].toDouble();
+            material.specularColor[2] = parts[3].toDouble();
+            material.specularStrength = std::clamp((material.specularColor[0]
+                                                    + material.specularColor[1]
+                                                    + material.specularColor[2]) / 3.0,
+                                                   0.0,
+                                                   1.0);
+            material.hasMaterial = true;
+        } else if (keyword == QStringLiteral("Ns") && parts.size() >= 2) {
+            material.specularPower = std::max(1.0, parts[1].toDouble());
+            material.hasMaterial = true;
+        } else if (keyword == QStringLiteral("d") && parts.size() >= 2) {
+            material.opacity = std::clamp(parts[1].toDouble(), 0.0, 1.0);
+            material.hasMaterial = true;
+        } else if (keyword == QStringLiteral("Tr") && parts.size() >= 2) {
+            material.opacity = std::clamp(1.0 - parts[1].toDouble(), 0.0, 1.0);
+            material.hasMaterial = true;
+        }
+    }
+
+    if (!material.hasMaterial && targetMaterialName.isEmpty() && seenAnyMaterial) {
+        file.seek(0);
+        stream.seek(0);
+        QString fallbackMaterial;
+        while (!stream.atEnd()) {
+            const QString rawLine = stream.readLine().trimmed();
+            if (rawLine.startsWith(QStringLiteral("newmtl "))) {
+                fallbackMaterial = rawLine.mid(6).trimmed();
+                break;
+            }
+        }
+        if (!fallbackMaterial.isEmpty()) {
+            return parseMtlMaterial(mtlPath, fallbackMaterial);
+        }
+    }
+
+    return material;
+}
+
+LoadedModelData::MaterialData inferDefaultMaterialFromFilePath(const QString &filePath)
+{
+    LoadedModelData::MaterialData material;
+    const QString name = QFileInfo(filePath).completeBaseName().toLower();
+
+    auto setColor = [&material](double r, double g, double b,
+                                double opacity = 1.0,
+                                double specular = 0.08,
+                                double specularPower = 8.0) {
+        material.color[0] = r;
+        material.color[1] = g;
+        material.color[2] = b;
+        material.opacity = opacity;
+        material.specularStrength = specular;
+        material.specularPower = specularPower;
+        material.hasMaterial = true;
+    };
+
+    // Reference anchor:
+    // Slicer's GenericAnatomyColors uses warm orange for generic organs and red for blood.
+    // Organ-specific hues below are an inference to match common medical illustration practice.
+    if (name == QStringLiteral("liver")) {
+        setColor(0.62, 0.29, 0.23);
+    } else if (name == QStringLiteral("spleen")) {
+        setColor(0.45, 0.16, 0.33);
+    } else if (name == QStringLiteral("pancreas")) {
+        setColor(0.92, 0.72, 0.44);
+    } else if (name == QStringLiteral("kidney_left") || name == QStringLiteral("kidney_right")) {
+        setColor(0.58, 0.22, 0.20);
+    } else if (name == QStringLiteral("adrenal_gland_left") || name == QStringLiteral("adrenal_gland_right")) {
+        setColor(0.90, 0.78, 0.46);
+    } else if (name == QStringLiteral("gallbladder")) {
+        setColor(0.20, 0.53, 0.24);
+    } else if (name == QStringLiteral("stomach")) {
+        setColor(0.84, 0.56, 0.63);
+    } else if (name == QStringLiteral("duodenum")) {
+        setColor(0.93, 0.76, 0.58);
+    } else if (name == QStringLiteral("small_bowel")) {
+        setColor(0.94, 0.80, 0.62);
+    } else if (name == QStringLiteral("colon")) {
+        setColor(0.78, 0.66, 0.50);
+    } else if (name == QStringLiteral("aorta")) {
+        setColor(0.78, 0.12, 0.12, 1.0, 0.18, 18.0);
+    } else if (name == QStringLiteral("inferior_vena_cava")) {
+        setColor(0.20, 0.34, 0.72, 1.0, 0.14, 14.0);
+    } else if (name == QStringLiteral("portal_vein_and_splenic_vein")) {
+        setColor(0.28, 0.46, 0.76, 1.0, 0.14, 14.0);
+    } else {
+        setColor(0.87, 0.51, 0.40);
+    }
+
+    return material;
 }
 
 QString formatItkDirection(const VolumeImageType::DirectionType &direction)
@@ -256,6 +473,7 @@ WindowLevelPresetData readNiftiWindowLevelPreset(vtkNIFTIImageReader *reader)
     auto *header = reader != nullptr ? reader->GetNIFTIHeader() : nullptr;
     if (header == nullptr) {
         return preset;
+        
     }
 
     const double calMin = header->GetCalMin();
@@ -509,7 +727,7 @@ void logNiftiOrientationDiagnostics(const QString &filePath,
                .arg(preset.explanation.isEmpty() ? QStringLiteral("<none>") : preset.explanation);
 }
 
-vtkSmartPointer<vtkPolyData> loadModelPolyData(const QString &filePath)
+vtkSmartPointer<vtkPolyData> loadModelPolyData(const QString &filePath, LoadedModelData::MaterialData *material)
 {
     const QString nativeFilePath = QDir::toNativeSeparators(filePath);
     const QByteArray utf8Path = nativeFilePath.toUtf8();
@@ -521,26 +739,65 @@ vtkSmartPointer<vtkPolyData> loadModelPolyData(const QString &filePath)
         reader->SetFileName(utf8Path.constData());
         reader->Update();
         polyData->DeepCopy(reader->GetOutput());
+        if (material != nullptr && !material->hasMaterial) {
+            *material = inferDefaultMaterialFromFilePath(filePath);
+        }
     } else if (suffix == QStringLiteral("obj")) {
+        const ObjMaterialReference materialReference = inspectObjMaterialReference(nativeFilePath);
+        if (material != nullptr) {
+            *material = parseMtlMaterial(materialReference.mtllibPath, materialReference.materialName);
+            if (!material->hasMaterial) {
+                *material = inferDefaultMaterialFromFilePath(filePath);
+            }
+        }
+
+        QByteArray effectiveUtf8Path = utf8Path;
+        std::unique_ptr<QTemporaryFile> sanitizedObj;
+        if (materialReference.requiresSanitizedLoad) {
+            sanitizedObj = std::make_unique<QTemporaryFile>(QDir::tempPath() + QStringLiteral("/dicomviewer-obj-XXXXXX.obj"));
+            sanitizedObj->setAutoRemove(false);
+            if (sanitizedObj->open()) {
+                if (writeSanitizedObjFile(nativeFilePath, sanitizedObj.get())) {
+                    effectiveUtf8Path = QDir::toNativeSeparators(sanitizedObj->fileName()).toUtf8();
+                }
+                sanitizedObj->close();
+            } else {
+                sanitizedObj.reset();
+            }
+        }
+
         auto reader = vtkSmartPointer<vtkOBJReader>::New();
-        reader->SetFileName(utf8Path.constData());
+        reader->SetFileName(effectiveUtf8Path.constData());
         reader->Update();
         polyData->DeepCopy(reader->GetOutput());
+
+        if (sanitizedObj != nullptr) {
+            QFile::remove(sanitizedObj->fileName());
+        }
     } else if (suffix == QStringLiteral("ply")) {
         auto reader = vtkSmartPointer<vtkPLYReader>::New();
         reader->SetFileName(utf8Path.constData());
         reader->Update();
         polyData->DeepCopy(reader->GetOutput());
+        if (material != nullptr && !material->hasMaterial) {
+            *material = inferDefaultMaterialFromFilePath(filePath);
+        }
     } else if (suffix == QStringLiteral("vtp")) {
         auto reader = vtkSmartPointer<vtkXMLPolyDataReader>::New();
         reader->SetFileName(utf8Path.constData());
         reader->Update();
         polyData->DeepCopy(reader->GetOutput());
+        if (material != nullptr && !material->hasMaterial) {
+            *material = inferDefaultMaterialFromFilePath(filePath);
+        }
     } else if (suffix == QStringLiteral("vtk")) {
         auto reader = vtkSmartPointer<vtkPolyDataReader>::New();
         reader->SetFileName(utf8Path.constData());
         reader->Update();
         polyData->DeepCopy(reader->GetOutput());
+        if (material != nullptr && !material->hasMaterial) {
+            *material = inferDefaultMaterialFromFilePath(filePath);
+        }
     } else {
         return nullptr;
     }
@@ -714,7 +971,8 @@ void loadModelData(const QStringList &modelFiles, StudyLoadResult *result, const
         reportProgress(feedback,
                        QStringLiteral("正在读取模型文件...\n%1").arg(modelFile),
                        percent);
-        auto polyData = loadModelPolyData(modelFile);
+        LoadedModelData::MaterialData material;
+        auto polyData = loadModelPolyData(modelFile, &material);
         if (polyData == nullptr) {
             ++modelIndex;
             continue;
@@ -723,6 +981,7 @@ void loadModelData(const QStringList &modelFiles, StudyLoadResult *result, const
         LoadedModelData modelData;
         modelData.filePath = modelFile;
         modelData.polyData = polyData;
+        modelData.material = material;
         result->models.push_back(modelData);
         ++modelIndex;
     }

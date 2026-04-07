@@ -113,7 +113,7 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
     volumePanel->setReferenceImageData(result.imageData);
     for (const LoadedModelData &model : result.models) {
         sidebarPanel->addObject(model.filePath);
-        volumePanel->addModelData(model.filePath, model.polyData);
+        volumePanel->addModelData(model.filePath, model.polyData, model.material);
     }
     volumePanel->endSceneBatch(modelSummaryText);
 
