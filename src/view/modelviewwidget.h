@@ -14,6 +14,7 @@ class QLabel;
 class QObject;
 class QPoint;
 class QVTKOpenGLNativeWidget;
+class QToolButton;
 class ModelViewCameraController;
 class ModelViewCrosshairController;
 class vtkActor;
@@ -41,6 +42,7 @@ public:
 
 signals:
     void cursorWorldPositionChanged(double x, double y, double z);
+    void maximizeToggled();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -51,6 +53,7 @@ private:
     void flushQueuedSceneUpdate();
 
     QLabel *m_statusLabel;
+    QToolButton *m_maximizeButton;
     QVTKOpenGLNativeWidget *m_vtkWidget;
     std::unique_ptr<ModelViewCameraController> m_cameraController;
     std::unique_ptr<ModelViewCrosshairController> m_crosshairController;
@@ -58,4 +61,7 @@ private:
     bool m_sceneBatchActive = false;
     bool m_sceneNeedsRender = false;
     bool m_sceneNeedsCameraReset = false;
+
+public:
+    void setMaximizedState(bool maximized);
 };

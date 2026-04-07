@@ -15,16 +15,15 @@ FourPaneContentWidget::FourPaneContentWidget(QWidget *parent)
     , m_sagittalPanel(new MprViewWidget(QStringLiteral("Sagittal MPR"), MprViewWidget::Orientation::Sagittal, this))
     , m_volumePanel(new ModelViewWidget(this))
     , m_sidebarPanel(new SceneSidebarWidget(this))
+    , m_viewArea(new SplitterGridWidget(
+          m_axialPanel,
+          m_coronalPanel,
+          m_sagittalPanel,
+          m_volumePanel,
+          this))
 {
-    auto *viewArea = new SplitterGridWidget(
-        m_axialPanel,
-        m_coronalPanel,
-        m_sagittalPanel,
-        m_volumePanel,
-        this);
-
     auto *rootSplitter = new QSplitter(Qt::Horizontal, this);
-    rootSplitter->addWidget(viewArea);
+    rootSplitter->addWidget(m_viewArea);
     rootSplitter->addWidget(m_sidebarPanel);
     rootSplitter->setStretchFactor(0, 5);
     rootSplitter->setStretchFactor(1, 2);
@@ -33,6 +32,12 @@ FourPaneContentWidget::FourPaneContentWidget(QWidget *parent)
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(rootSplitter);
+
+    connect(m_axialPanel, &MprViewWidget::maximizeToggled, this, [this]() { toggleMaximizedPane(m_axialPanel); });
+    connect(m_coronalPanel, &MprViewWidget::maximizeToggled, this, [this]() { toggleMaximizedPane(m_coronalPanel); });
+    connect(m_sagittalPanel, &MprViewWidget::maximizeToggled, this, [this]() { toggleMaximizedPane(m_sagittalPanel); });
+    connect(m_volumePanel, &ModelViewWidget::maximizeToggled, this, [this]() { toggleMaximizedPane(m_volumePanel); });
+    updatePaneMaximizeButtons();
 }
 
 MprViewWidget *FourPaneContentWidget::axialPanel() const
@@ -58,4 +63,18 @@ ModelViewWidget *FourPaneContentWidget::volumePanel() const
 SceneSidebarWidget *FourPaneContentWidget::sidebarPanel() const
 {
     return m_sidebarPanel;
+}
+
+void FourPaneContentWidget::toggleMaximizedPane(QWidget *pane)
+{
+    m_viewArea->toggleMaximizedPane(pane);
+    updatePaneMaximizeButtons();
+}
+
+void FourPaneContentWidget::updatePaneMaximizeButtons()
+{
+    m_axialPanel->setMaximizedState(m_viewArea->isPaneMaximized(m_axialPanel));
+    m_coronalPanel->setMaximizedState(m_viewArea->isPaneMaximized(m_coronalPanel));
+    m_sagittalPanel->setMaximizedState(m_viewArea->isPaneMaximized(m_sagittalPanel));
+    m_volumePanel->setMaximizedState(m_viewArea->isPaneMaximized(m_volumePanel));
 }

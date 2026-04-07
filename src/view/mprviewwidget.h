@@ -15,6 +15,7 @@ class QEvent;
 class QPoint;
 class QResizeEvent;
 class QSlider;
+class QToolButton;
 class QVTKOpenGLNativeWidget;
 class MprWindowLevelController;
 class vtkImageActor;
@@ -46,6 +47,7 @@ public:
 signals:
     void cursorWorldPositionChanged(double x, double y, double z);
     void windowLevelChanged(double window, double level);
+    void maximizeToggled();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -75,6 +77,7 @@ private:
     QLabel *m_titleLabel;
     QLabel *m_sliceLabel;
     QSlider *m_slider;
+    QToolButton *m_maximizeButton;
     QVTKOpenGLNativeWidget *m_vtkWidget;
     std::unique_ptr<MprWindowLevelController> m_windowLevelController;
     vtkSmartPointer<vtkRenderer> m_renderer;
@@ -86,4 +89,7 @@ private:
     SliceGeometry m_sliceGeometry;
     std::array<double, 3> m_cursorWorldPosition { 0.0, 0.0, 0.0 };
     bool m_hasImage = false;
+
+public:
+    void setMaximizedState(bool maximized);
 };

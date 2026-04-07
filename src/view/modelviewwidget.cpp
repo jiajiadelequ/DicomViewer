@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -26,6 +27,7 @@
 ModelViewWidget::ModelViewWidget(QWidget *parent)
     : QWidget(parent)
     , m_statusLabel(new QLabel(QStringLiteral("等待加载模型"), this))
+    , m_maximizeButton(new QToolButton(this))
     , m_vtkWidget(new QVTKOpenGLNativeWidget(this))
     , m_cameraController(nullptr)
     , m_crosshairController(nullptr)
@@ -40,6 +42,8 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
     headerLayout->setSpacing(6);
 
     m_statusLabel->setStyleSheet(QStringLiteral("color: #6b7280;"));
+    m_maximizeButton->setAutoRaise(true);
+    connect(m_maximizeButton, &QToolButton::clicked, this, &ModelViewWidget::maximizeToggled);
 
     auto renderWindow = vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
     m_vtkWidget->setRenderWindow(renderWindow);
@@ -58,10 +62,12 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
 
     headerLayout->addStretch(1);
     headerLayout->addWidget(m_cameraController->viewButton());
+    headerLayout->addWidget(m_maximizeButton);
 
     layout->addLayout(headerLayout);
     layout->addWidget(m_vtkWidget, 1);
     layout->addWidget(m_statusLabel);
+    setMaximizedState(false);
 }
 
 void ModelViewWidget::beginSceneBatch(const QString &message)
@@ -157,6 +163,14 @@ bool ModelViewWidget::eventFilter(QObject *watched, QEvent *event)
     }
 
     switch (event->type()) {
+    case QEvent::MouseButtonDblClick: {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::LeftButton) {
+            emit maximizeToggled();
+            return true;
+        }
+        break;
+    }
     case QEvent::MouseButtonPress: {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
         if (mouseEvent->button() != Qt::LeftButton) {
@@ -196,6 +210,16 @@ bool ModelViewWidget::eventFilter(QObject *watched, QEvent *event)
     }
 
     return QWidget::eventFilter(watched, event);
+}
+
+void ModelViewWidget::setMaximizedState(bool maximized)
+{
+    m_maximizeButton->setIcon(style()->standardIcon(maximized
+                                                        ? QStyle::SP_TitleBarNormalButton
+                                                        : QStyle::SP_TitleBarMaxButton));
+    m_maximizeButton->setToolTip(maximized
+                                     ? QStringLiteral("恢复四视图")
+                                     : QStringLiteral("放大当前视图"));
 }
 
 void ModelViewWidget::setCursorWorldPositionInternal(const std::array<double, 3> &worldPosition, bool emitSignal)

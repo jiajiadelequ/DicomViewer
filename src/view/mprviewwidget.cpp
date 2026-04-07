@@ -7,6 +7,9 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QSlider>
+#include <QStyle>
+#include <QToolButton>
+#include <QHBoxLayout>
 #include <QVBoxLayout>
 
 #include <QVTKOpenGLNativeWidget.h>
@@ -40,6 +43,7 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     , m_titleLabel(new QLabel(title, this))
     , m_sliceLabel(new QLabel(QStringLiteral("未加载"), this))
     , m_slider(new QSlider(Qt::Horizontal, this))
+    , m_maximizeButton(new QToolButton(this))
     , m_vtkWidget(new QVTKOpenGLNativeWidget(this))
     , m_windowLevelController(std::make_unique<MprWindowLevelController>(m_vtkWidget))
     , m_renderer(vtkSmartPointer<vtkRenderer>::New())
@@ -52,10 +56,16 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
+    auto *headerLayout = new QHBoxLayout();
+    headerLayout->setContentsMargins(0, 0, 0, 0);
+    headerLayout->setSpacing(6);
 
     m_titleLabel->setStyleSheet(QStringLiteral("font-size: 12pt; font-weight: 700;"));
     m_sliceLabel->setStyleSheet(QStringLiteral("color: #6b7280;"));
     m_slider->setEnabled(false);
+    m_maximizeButton->setAutoRaise(true);
+    m_maximizeButton->setToolTip(QStringLiteral("放大当前视图"));
+    connect(m_maximizeButton, &QToolButton::clicked, this, &MprViewWidget::maximizeToggled);
 
     auto renderWindow = vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
     m_vtkWidget->setRenderWindow(renderWindow);
@@ -79,13 +89,17 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     m_vtkWidget->renderWindow()->AddRenderer(m_renderer);
     resetCamera();
 
-    layout->addWidget(m_titleLabel);
+    headerLayout->addWidget(m_titleLabel);
+    headerLayout->addStretch(1);
+    headerLayout->addWidget(m_maximizeButton);
+    layout->addLayout(headerLayout);
     layout->addWidget(m_vtkWidget, 1);
     layout->addWidget(m_sliceLabel);
     layout->addWidget(m_slider);
 
     connect(m_slider, &QSlider::valueChanged, this, &MprViewWidget::onSliceChanged);
     m_windowLevelController->updateOverlayPosition();
+    setMaximizedState(false);
 }
 
 MprViewWidget::~MprViewWidget() = default;
@@ -177,7 +191,19 @@ void MprViewWidget::clearView(const QString &message)
 
 bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched != m_vtkWidget || !m_hasImage) {
+    if (watched != m_vtkWidget) {
+        return QWidget::eventFilter(watched, event);
+    }
+
+    if (event->type() == QEvent::MouseButtonDblClick) {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::LeftButton) {
+            emit maximizeToggled();
+            return true;
+        }
+    }
+
+    if (!m_hasImage) {
         return QWidget::eventFilter(watched, event);
     }
 
@@ -258,6 +284,16 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
     }
 
     return QWidget::eventFilter(watched, event);
+}
+
+void MprViewWidget::setMaximizedState(bool maximized)
+{
+    m_maximizeButton->setIcon(style()->standardIcon(maximized
+                                                        ? QStyle::SP_TitleBarNormalButton
+                                                        : QStyle::SP_TitleBarMaxButton));
+    m_maximizeButton->setToolTip(maximized
+                                     ? QStringLiteral("恢复四视图")
+                                     : QStringLiteral("放大当前视图"));
 }
 
 void MprViewWidget::resizeEvent(QResizeEvent *event)

@@ -11,6 +11,10 @@ SplitterGridWidget::SplitterGridWidget(QWidget *topLeft,
                                        QWidget *bottomRight,
                                        QWidget *parent)
     : QWidget(parent)
+    , m_topLeftPane(topLeft)
+    , m_topRightPane(topRight)
+    , m_bottomLeftPane(bottomLeft)
+    , m_bottomRightPane(bottomRight)
     , m_topRowSplitter(new QSplitter(Qt::Horizontal, this))
     , m_bottomRowSplitter(new QSplitter(Qt::Horizontal, this))
     , m_rowSplitter(new QSplitter(Qt::Vertical, this))
@@ -59,9 +63,34 @@ SplitterGridWidget::SplitterGridWidget(QWidget *topLeft,
     });
 }
 
+void SplitterGridWidget::toggleMaximizedPane(QWidget *pane)
+{
+    if (pane == nullptr) {
+        return;
+    }
+
+    if (m_maximizedPane == pane) {
+        m_maximizedPane = nullptr;
+        restoreGridLayout();
+        return;
+    }
+
+    m_maximizedPane = pane;
+    applyMaximizedLayout();
+}
+
+bool SplitterGridWidget::isPaneMaximized(QWidget *pane) const
+{
+    return pane != nullptr && m_maximizedPane == pane;
+}
+
 void SplitterGridWidget::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
+    if (m_maximizedPane != nullptr) {
+        applyMaximizedLayout();
+        return;
+    }
     applyRowRatio();
     applyColumnRatio(nullptr);
 }
@@ -132,4 +161,40 @@ void SplitterGridWidget::applyRowRatio()
     const int top = static_cast<int>(m_rowRatio * 1000.0);
     m_rowSplitter->setSizes(QList<int> { top, 1000 - top });
     m_syncingRows = false;
+}
+
+void SplitterGridWidget::applyMaximizedLayout()
+{
+    const bool topLeft = m_maximizedPane == m_topLeftPane;
+    const bool topRight = m_maximizedPane == m_topRightPane;
+    const bool bottomLeft = m_maximizedPane == m_bottomLeftPane;
+    const bool bottomRight = m_maximizedPane == m_bottomRightPane;
+
+    m_topLeftPane->setVisible(topLeft);
+    m_topRightPane->setVisible(topRight);
+    m_bottomLeftPane->setVisible(bottomLeft);
+    m_bottomRightPane->setVisible(bottomRight);
+
+    m_topRowSplitter->setVisible(topLeft || topRight);
+    m_bottomRowSplitter->setVisible(bottomLeft || bottomRight);
+
+    if (topLeft || topRight) {
+        m_topRowSplitter->setSizes(QList<int> { topLeft ? 1000 : 0, topRight ? 1000 : 0 });
+        m_rowSplitter->setSizes(QList<int> { 1000, 0 });
+    } else if (bottomLeft || bottomRight) {
+        m_bottomRowSplitter->setSizes(QList<int> { bottomLeft ? 1000 : 0, bottomRight ? 1000 : 0 });
+        m_rowSplitter->setSizes(QList<int> { 0, 1000 });
+    }
+}
+
+void SplitterGridWidget::restoreGridLayout()
+{
+    m_topLeftPane->show();
+    m_topRightPane->show();
+    m_bottomLeftPane->show();
+    m_bottomRightPane->show();
+    m_topRowSplitter->show();
+    m_bottomRowSplitter->show();
+    applyRowRatio();
+    applyColumnRatio(nullptr);
 }
