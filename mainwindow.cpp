@@ -14,6 +14,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QPointer>
 #include <QProgressBar>
 #include <QStatusBar>
 #include <QStringList>
@@ -160,23 +161,23 @@ void MainWindow::beginStudyLoad(const QString &sourcePath, bool sourceIsFile)
 
     const int loadId = m_activeLoadId;
     const std::shared_ptr<std::atomic_bool> cancelFlag = m_loadCancelFlag;
+    const QPointer<MainWindow> guardedThis(this);
     StudyLoadFeedback feedback;
     feedback.isCancelled = [cancelFlag]() {
         return cancelFlag != nullptr && cancelFlag->load();
     };
-    feedback.reportProgress = [this, loadId](const QString &message, int percent) {
-        auto *appObject = qApp;
-        if (appObject == nullptr) {
+    feedback.reportProgress = [guardedThis, loadId](const QString &message, int percent) {
+        if (guardedThis.isNull()) {
             return;
         }
 
-        QMetaObject::invokeMethod(appObject,
-                                  [this, loadId, message, percent]() {
-                                      if (loadId != m_activeLoadId) {
+        QMetaObject::invokeMethod(guardedThis.data(),
+                                  [guardedThis, loadId, message, percent]() {
+                                      if (guardedThis.isNull() || loadId != guardedThis->m_activeLoadId) {
                                           return;
                                       }
 
-                                      updateLoadingProgress(message, percent);
+                                      guardedThis->updateLoadingProgress(message, percent);
                                   },
                                   Qt::QueuedConnection);
     };

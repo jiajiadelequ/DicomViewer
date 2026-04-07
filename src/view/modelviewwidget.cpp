@@ -47,7 +47,8 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
     m_vtkWidget->installEventFilter(this);
     m_vtkWidget->setMouseTracking(true);
     renderWindow->AddRenderer(m_renderer);
-    m_renderer->SetBackground(0.12, 0.16, 0.22);
+    // Use a low-saturation light background to improve contrast for pale anatomy meshes.
+    m_renderer->SetBackground(0.93, 0.95, 0.98);
 
     m_cameraController = std::make_unique<ModelViewCameraController>(this, m_renderer, m_vtkWidget->interactor());
     m_crosshairController = std::make_unique<ModelViewCrosshairController>(m_renderer);

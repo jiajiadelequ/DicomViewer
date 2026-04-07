@@ -81,6 +81,7 @@ CMakeLists.txt.user*
 /VTK
 /VTK*
 /third_party
+/tools
 /release-slim
 /MedproViewer_Build
 /.vs/
