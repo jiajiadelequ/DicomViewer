@@ -19,10 +19,12 @@ public:
     void addObject(const QString &filePath);
     void setSummaryText(const QString &text);
     void setCrosshairState(bool available, bool enabled);
+    void setRulerState(bool available, bool enabled);
     void setClippingState(bool available, bool enabled);
 
 signals:
     void crosshairToggled(bool checked);
+    void rulerToggled(bool checked);
     void clippingToggled(bool checked);
     void objectVisibilityChanged(int index, bool visible);
 
@@ -32,5 +34,6 @@ private:
     QListWidget *m_objectList;
     QLabel *m_summaryLabel;
     QPushButton *m_crosshairToggleButton;
+    QPushButton *m_rulerToggleButton;
     QPushButton *m_clippingToggleButton;
 };

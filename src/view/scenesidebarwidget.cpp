@@ -11,6 +11,7 @@ SceneSidebarWidget::SceneSidebarWidget(QWidget *parent)
     , m_objectList(new QListWidget(this))
     , m_summaryLabel(new QLabel(QStringLiteral("尚未加载病例包"), this))
     , m_crosshairToggleButton(new QPushButton(QStringLiteral("十字线定位: 关"), this))
+    , m_rulerToggleButton(new QPushButton(QStringLiteral("皮尺测量: 关"), this))
     , m_clippingToggleButton(new QPushButton(QStringLiteral("模型裁剪: 关"), this))
 {
     // 侧栏内部自管显示细节，外层只负责给它喂数据和接收信号。
@@ -22,6 +23,9 @@ SceneSidebarWidget::SceneSidebarWidget(QWidget *parent)
     m_crosshairToggleButton->setCheckable(true);
     m_crosshairToggleButton->setChecked(false);
     m_crosshairToggleButton->setEnabled(false);
+    m_rulerToggleButton->setCheckable(true);
+    m_rulerToggleButton->setChecked(false);
+    m_rulerToggleButton->setEnabled(false);
     m_clippingToggleButton->setCheckable(true);
     m_clippingToggleButton->setChecked(false);
     m_clippingToggleButton->setEnabled(false);
@@ -31,11 +35,13 @@ SceneSidebarWidget::SceneSidebarWidget(QWidget *parent)
     layout->setSpacing(8);
     layout->addWidget(titleLabel);
     layout->addWidget(m_crosshairToggleButton);
+    layout->addWidget(m_rulerToggleButton);
     layout->addWidget(m_clippingToggleButton);
     layout->addWidget(m_objectList, 1);
     layout->addWidget(m_summaryLabel);
 
     connect(m_crosshairToggleButton, &QPushButton::toggled, this, &SceneSidebarWidget::crosshairToggled);
+    connect(m_rulerToggleButton, &QPushButton::toggled, this, &SceneSidebarWidget::rulerToggled);
     connect(m_clippingToggleButton, &QPushButton::toggled, this, &SceneSidebarWidget::clippingToggled);
     connect(m_objectList, &QListWidget::itemChanged, this, &SceneSidebarWidget::handleItemChanged);
 }
@@ -68,6 +74,17 @@ void SceneSidebarWidget::setCrosshairState(bool available, bool enabled)
                                          ? QStringLiteral("十字线定位: 开")
                                          : QStringLiteral("十字线定位: 关"));
     m_crosshairToggleButton->blockSignals(false);
+}
+
+void SceneSidebarWidget::setRulerState(bool available, bool enabled)
+{
+    m_rulerToggleButton->blockSignals(true);
+    m_rulerToggleButton->setEnabled(available);
+    m_rulerToggleButton->setChecked(enabled);
+    m_rulerToggleButton->setText(enabled
+                                     ? QStringLiteral("皮尺测量: 开")
+                                     : QStringLiteral("皮尺测量: 关"));
+    m_rulerToggleButton->blockSignals(false);
 }
 
 void SceneSidebarWidget::setClippingState(bool available, bool enabled)

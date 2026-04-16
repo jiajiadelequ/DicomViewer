@@ -10,6 +10,7 @@
 
 class QLabel;
 class MprCrosshairController;
+class MprRulerController;
 class QObject;
 class QEvent;
 class QPoint;
@@ -38,6 +39,7 @@ public:
     void clearRecommendedWindowLevel();
     void setImageData(vtkImageData *imageData);
     void setCrosshairEnabled(bool enabled);
+    void setRulerEnabled(bool enabled);
     void setCursorWorldPosition(double x, double y, double z);
     void setWindowLevel(double window, double level);
     [[nodiscard]] std::array<double, 3> cursorWorldPosition() const;
@@ -70,6 +72,7 @@ private:
     void updateSliceControls();
     void updateSliceLabel(int sliderValue);
     void setWindowLevelInternal(double window, double level, bool emitSignal);
+    [[nodiscard]] QString baseSliceLabelText(int sliderValue) const;
     [[nodiscard]] std::array<double, 3> sliceOriginForSliderValue(int sliderValue) const;
     [[nodiscard]] int sliderValueForWorldPosition(const std::array<double, 3> &worldPosition) const;
 
@@ -85,10 +88,12 @@ private:
     vtkSmartPointer<vtkImageMapToWindowLevelColors> m_windowLevel;
     vtkSmartPointer<vtkImageActor> m_imageActor;
     std::unique_ptr<MprCrosshairController> m_crosshairController;
+    std::unique_ptr<MprRulerController> m_rulerController;
     vtkSmartPointer<vtkImageData> m_imageData;
     SliceGeometry m_sliceGeometry;
     std::array<double, 3> m_cursorWorldPosition { 0.0, 0.0, 0.0 };
     bool m_hasImage = false;
+    bool m_rulerEnabled = false;
 
 public:
     void setMaximizedState(bool maximized);

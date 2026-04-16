@@ -1,6 +1,7 @@
 #include "mprviewwidget.h"
 
 #include "mprcrosshaircontroller.h"
+#include "mprrulercontroller.h"
 #include "mprwindowlevelcontroller.h"
 
 #include <QEvent>
@@ -26,6 +27,7 @@
 #include <vtkRenderWindow.h>
 #include <vtkRenderWindowInteractor.h>
 #include <vtkRenderer.h>
+#include <vtkTextActor.h>
 
 #include <algorithm>
 #include <array>
@@ -51,6 +53,7 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     , m_windowLevel(vtkSmartPointer<vtkImageMapToWindowLevelColors>::New())
     , m_imageActor(vtkSmartPointer<vtkImageActor>::New())
     , m_crosshairController(std::make_unique<MprCrosshairController>(m_imageActor))
+    , m_rulerController(std::make_unique<MprRulerController>(m_imageActor))
     , m_imageData(vtkSmartPointer<vtkImageData>::New())
 {
     auto *layout = new QVBoxLayout(this);
@@ -86,6 +89,8 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     m_renderer->SetBackground(0.05, 0.05, 0.06);
     m_renderer->AddActor(m_imageActor);
     m_renderer->AddActor(m_crosshairController->actor());
+    m_renderer->AddActor(m_rulerController->actor());
+    m_renderer->AddActor2D(m_rulerController->textActor());
     m_vtkWidget->renderWindow()->AddRenderer(m_renderer);
     resetCamera();
 
@@ -141,6 +146,8 @@ void MprViewWidget::setImageData(vtkImageData *imageData)
     m_windowLevelController->applyTo(m_windowLevel);
     m_imageActor->SetVisibility(true);
     m_crosshairController->setVisible(true);
+    m_rulerController->clear();
+    m_rulerController->setVisible(m_rulerEnabled);
     updateSliceControls();
     renderCurrentState(true);
 }
@@ -151,6 +158,18 @@ void MprViewWidget::setCrosshairEnabled(bool enabled)
 
     if (m_hasImage) {
         renderCurrentState(false);
+    }
+}
+
+void MprViewWidget::setRulerEnabled(bool enabled)
+{
+    m_rulerEnabled = enabled;
+    m_rulerController->setEnabled(enabled);
+
+    if (m_hasImage) {
+        renderCurrentState(false);
+    } else {
+        updateSliceLabel(0);
     }
 }
 
@@ -186,6 +205,8 @@ void MprViewWidget::clearView(const QString &message)
     m_reslice->SetInputData(static_cast<vtkImageData *>(nullptr));
     m_imageActor->SetVisibility(false);
     m_crosshairController->setVisible(false);
+    m_rulerController->clear();
+    m_rulerController->setVisible(false);
     m_vtkWidget->renderWindow()->Render();
 }
 
@@ -210,8 +231,28 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
     switch (event->type()) {
     case QEvent::MouseButtonPress: {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (m_rulerEnabled
+            && mouseEvent->button() == Qt::RightButton
+            && mouseEvent->modifiers() == Qt::NoModifier
+            && m_rulerController->isMeasuring()) {
+            m_rulerController->finishMeasurement();
+            renderCurrentState(false);
+            return true;
+        }
+
         if (mouseEvent->button() != Qt::LeftButton) {
             break;
+        }
+
+        if (m_rulerEnabled && mouseEvent->modifiers() == Qt::NoModifier) {
+            if (m_rulerController->recordPoint(m_renderer,
+                                               m_vtkWidget,
+                                               mouseEvent->pos(),
+                                               m_sliceGeometry,
+                                               m_slider->value())) {
+                renderCurrentState(false);
+                return true;
+            }
         }
 
         if (m_crosshairController->isEnabled() && mouseEvent->modifiers() == Qt::NoModifier) {
@@ -241,6 +282,17 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
     }
     case QEvent::MouseMove: {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
+
+        if (m_rulerEnabled && mouseEvent->modifiers() == Qt::NoModifier) {
+            if (m_rulerController->updateHoverPoint(m_renderer,
+                                                    m_vtkWidget,
+                                                    mouseEvent->pos(),
+                                                    m_sliceGeometry,
+                                                    m_slider->value())) {
+                renderCurrentState(false);
+                return true;
+            }
+        }
 
         Axis worldPosition;
         if (m_crosshairController->updateInteraction(m_renderer,
@@ -395,6 +447,9 @@ void MprViewWidget::renderCurrentState(bool fitViewport)
     m_windowLevelController->applyTo(m_windowLevel);
     applyCurrentSlice(m_slider->value());
     m_crosshairController->updateGeometry(m_cursorWorldPosition, m_sliceGeometry, m_slider->value());
+    m_rulerController->setVisible(m_rulerEnabled);
+    m_rulerController->updateGeometry(m_sliceGeometry, m_slider->value());
+    updateSliceLabel(m_slider->value());
 
     if (!m_vtkWidget->isVisible() || m_vtkWidget->width() <= 0 || m_vtkWidget->height() <= 0) {
         return;
@@ -464,16 +519,7 @@ void MprViewWidget::updateSliceControls()
 
 void MprViewWidget::updateSliceLabel(int sliderValue)
 {
-    if (m_sliceGeometry.sliceCount <= 0) {
-        m_sliceLabel->setText(QStringLiteral("未加载"));
-        return;
-    }
-
-    const int clampedValue = std::clamp(sliderValue, 0, m_sliceGeometry.sliceCount - 1);
-    m_sliceLabel->setText(QStringLiteral("%1 Slice: %2 / %3")
-                              .arg(MprSliceMath::orientationName(m_orientation))
-                              .arg(clampedValue + 1)
-                              .arg(m_sliceGeometry.sliceCount));
+    m_sliceLabel->setText(baseSliceLabelText(sliderValue));
 }
 
 void MprViewWidget::setWindowLevelInternal(double window, double level, bool emitSignal)
@@ -486,6 +532,19 @@ void MprViewWidget::setWindowLevelInternal(double window, double level, bool emi
         const auto values = m_windowLevelController->currentWindowLevel();
         emit windowLevelChanged(values.window, values.level);
     }
+}
+
+QString MprViewWidget::baseSliceLabelText(int sliderValue) const
+{
+    if (m_sliceGeometry.sliceCount <= 0) {
+        return QStringLiteral("未加载");
+    }
+
+    const int clampedValue = std::clamp(sliderValue, 0, m_sliceGeometry.sliceCount - 1);
+    return QStringLiteral("%1 Slice: %2 / %3")
+        .arg(MprSliceMath::orientationName(m_orientation))
+        .arg(clampedValue + 1)
+        .arg(m_sliceGeometry.sliceCount);
 }
 
 std::array<double, 3> MprViewWidget::sliceOriginForSliderValue(int sliderValue) const

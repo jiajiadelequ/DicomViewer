@@ -80,6 +80,7 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
     if (result.imageData != nullptr) {
         m_hasImageData = true;
         setCrosshairEnabled(false);
+        setRulerEnabled(false);
         m_imageData = result.imageData;
         if (result.windowLevelPreset.isValid) {
             for (MprViewWidget *panel : panels) {
@@ -97,6 +98,7 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
     } else {
         m_hasImageData = false;
         setCrosshairEnabled(false);
+        setRulerEnabled(false);
         m_imageData = nullptr;
         const QString imageText = QStringLiteral("未发现可显示的影像数据");
         for (MprViewWidget *panel : panels) {
@@ -174,6 +176,10 @@ void FourPaneViewer::ensureContentPage()
             this,
             &FourPaneViewer::handleCrosshairToggle);
     connect(m_contentPage->sidebarPanel(),
+            &SceneSidebarWidget::rulerToggled,
+            this,
+            &FourPaneViewer::handleRulerToggle);
+    connect(m_contentPage->sidebarPanel(),
             &SceneSidebarWidget::clippingToggled,
             this,
             &FourPaneViewer::handleClippingToggle);
@@ -204,6 +210,22 @@ void FourPaneViewer::setCrosshairEnabled(bool enabled)
     }
 }
 
+void FourPaneViewer::setRulerEnabled(bool enabled)
+{
+    const bool actualEnabled = enabled && m_hasImageData;
+    m_rulerEnabled = actualEnabled;
+
+    if (m_contentPage != nullptr) {
+        m_contentPage->sidebarPanel()->setRulerState(m_hasImageData, actualEnabled);
+    }
+
+    for (MprViewWidget *panel : mprPanels(m_contentPage)) {
+        if (panel != nullptr) {
+            panel->setRulerEnabled(actualEnabled);
+        }
+    }
+}
+
 void FourPaneViewer::setClippingEnabled(bool enabled)
 {
     m_clippingEnabled = enabled;
@@ -224,6 +246,11 @@ void FourPaneViewer::handleCrosshairToggle(bool checked)
 
     const auto initialCursor = m_contentPage->axialPanel()->cursorWorldPosition();
     syncCrosshairPosition(initialCursor[0], initialCursor[1], initialCursor[2]);
+}
+
+void FourPaneViewer::handleRulerToggle(bool checked)
+{
+    setRulerEnabled(checked);
 }
 
 void FourPaneViewer::handleClippingToggle(bool checked)

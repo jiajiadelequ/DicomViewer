@@ -25,8 +25,10 @@ public:
 private:
     void ensureContentPage();
     void setCrosshairEnabled(bool enabled);
+    void setRulerEnabled(bool enabled);
     void setClippingEnabled(bool enabled);
     void handleCrosshairToggle(bool checked);
+    void handleRulerToggle(bool checked);
     void handleClippingToggle(bool checked);
     void handleObjectVisibilityChanged(int index, bool visible);
     void syncCrosshairPosition(double x, double y, double z);
@@ -38,6 +40,7 @@ private:
     vtkSmartPointer<vtkImageData> m_imageData;
     bool m_hasImageData = false;
     bool m_crosshairEnabled = false;
+    bool m_rulerEnabled = false;
     bool m_clippingEnabled = false;
     bool m_syncingCrosshair = false;
     bool m_syncingWindowLevel = false;
