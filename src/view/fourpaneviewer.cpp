@@ -109,6 +109,7 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
         ? QStringLiteral("未发现模型文件")
         : QStringLiteral("已发现 %1 个模型文件").arg(static_cast<int>(result.models.size()));
     sidebarPanel->clearObjects();
+    setClippingEnabled(false);
     volumePanel->beginSceneBatch(modelSummaryText);
     volumePanel->setReferenceImageData(result.imageData);
     for (const LoadedModelData &model : result.models) {
@@ -116,6 +117,7 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
         volumePanel->addModelData(model.filePath, model.polyData, model.material);
     }
     volumePanel->endSceneBatch(modelSummaryText);
+    sidebarPanel->setClippingState(volumePanel->hasModels(), false);
 
     sidebarPanel->setSummaryText(buildStudySummaryText(result.package));
     m_rootLayout->setCurrentWidget(m_contentPage);
@@ -172,6 +174,10 @@ void FourPaneViewer::ensureContentPage()
             this,
             &FourPaneViewer::handleCrosshairToggle);
     connect(m_contentPage->sidebarPanel(),
+            &SceneSidebarWidget::clippingToggled,
+            this,
+            &FourPaneViewer::handleClippingToggle);
+    connect(m_contentPage->sidebarPanel(),
             &SceneSidebarWidget::objectVisibilityChanged,
             this,
             &FourPaneViewer::handleObjectVisibilityChanged);
@@ -198,6 +204,17 @@ void FourPaneViewer::setCrosshairEnabled(bool enabled)
     }
 }
 
+void FourPaneViewer::setClippingEnabled(bool enabled)
+{
+    m_clippingEnabled = enabled;
+    if (m_contentPage == nullptr) {
+        return;
+    }
+
+    m_contentPage->volumePanel()->setClippingEnabled(enabled);
+    m_contentPage->sidebarPanel()->setClippingState(m_contentPage->volumePanel()->hasModels(), enabled);
+}
+
 void FourPaneViewer::handleCrosshairToggle(bool checked)
 {
     setCrosshairEnabled(checked);
@@ -207,6 +224,11 @@ void FourPaneViewer::handleCrosshairToggle(bool checked)
 
     const auto initialCursor = m_contentPage->axialPanel()->cursorWorldPosition();
     syncCrosshairPosition(initialCursor[0], initialCursor[1], initialCursor[2]);
+}
+
+void FourPaneViewer::handleClippingToggle(bool checked)
+{
+    setClippingEnabled(checked);
 }
 
 void FourPaneViewer::handleObjectVisibilityChanged(int index, bool visible)

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <memory>
+#include <vector>
 
 #include <QWidget>
 
@@ -18,7 +19,12 @@ class QToolButton;
 class ModelViewCameraController;
 class ModelViewCrosshairController;
 class vtkActor;
+class vtkBoxWidget2;
+class vtkCallbackCommand;
+class vtkPlanes;
 class vtkImageData;
+class vtkObject;
+class vtkPolyDataMapper;
 class vtkPolyData;
 class vtkRenderer;
 
@@ -37,8 +43,10 @@ public:
     void setModelVisibility(int index, bool visible);
     void setReferenceImageData(vtkImageData *imageData);
     void setCrosshairEnabled(bool enabled);
+    void setClippingEnabled(bool enabled);
     void setCursorWorldPosition(double x, double y, double z);
     [[nodiscard]] std::array<double, 3> cursorWorldPosition() const;
+    [[nodiscard]] bool hasModels() const;
 
 signals:
     void cursorWorldPositionChanged(double x, double y, double z);
@@ -48,6 +56,18 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    struct ModelEntry
+    {
+        vtkSmartPointer<vtkActor> actor;
+        vtkSmartPointer<vtkPolyDataMapper> mapper;
+        vtkSmartPointer<vtkPolyData> originalPolyData;
+    };
+
+    void initializeClippingWidget();
+    void teardownClippingWidget();
+    void updateClippedModels();
+    static void handleBoxWidgetInteraction(vtkObject *caller, unsigned long eventId, void *clientData, void *callData);
+
     void setCursorWorldPositionInternal(const std::array<double, 3> &worldPosition, bool emitSignal);
     void queueSceneUpdate(bool resetCamera);
     void flushQueuedSceneUpdate();
@@ -58,6 +78,10 @@ private:
     std::unique_ptr<ModelViewCameraController> m_cameraController;
     std::unique_ptr<ModelViewCrosshairController> m_crosshairController;
     vtkSmartPointer<vtkRenderer> m_renderer;
+    vtkSmartPointer<vtkBoxWidget2> m_clippingWidget;
+    vtkSmartPointer<vtkCallbackCommand> m_clippingCallback;
+    std::vector<ModelEntry> m_models;
+    bool m_clippingEnabled = false;
     bool m_sceneBatchActive = false;
     bool m_sceneNeedsRender = false;
     bool m_sceneNeedsCameraReset = false;
