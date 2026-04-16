@@ -84,6 +84,9 @@ private:
     std::vector<ModelEntry> m_models;
     bool m_clippingEnabled = false;
     bool m_clippingPreviewDirty = false;
+    bool m_manualClippingFaceDragActive = false;
+    int m_manualClippingInteractionState = 0;
+    int m_hoveredClippingInteractionState = 0;
     bool m_sceneBatchActive = false;
     bool m_sceneNeedsRender = false;
     bool m_sceneNeedsCameraReset = false;
