@@ -30,6 +30,15 @@
 #include <vtkVersion.h>
 #include <zlib.h>
 
+namespace
+{
+constexpr int kMaxRecentEntries = 10;
+constexpr const char kLastOpenDirectoryKey[] = "paths/lastOpenDirectory";
+constexpr const char kRecentEntriesKey[] = "paths/recentEntries";
+constexpr const char kRecentEntryPathKey[] = "path";
+constexpr const char kRecentEntryIsFileKey[] = "sourceIsFile";
+}
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , m_viewer(new FourPaneViewer(this))
@@ -41,6 +50,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_loadingMessageLabel(nullptr)
     , m_loadingProgressBar(nullptr)
     , m_loadingCancelButton(nullptr)
+    , m_recentMenu(nullptr)
 {
     setCentralWidget(m_viewer);
     createMenus();
@@ -69,7 +79,7 @@ namespace
 QString lastOpenDirectory()
 {
     QSettings settings;
-    return settings.value(QStringLiteral("paths/lastOpenDirectory")).toString();
+    return settings.value(QLatin1String(kLastOpenDirectoryKey)).toString();
 }
 
 void rememberLastOpenDirectory(const QString &path)
@@ -78,7 +88,15 @@ void rememberLastOpenDirectory(const QString &path)
         return;
     }
     QSettings settings;
-    settings.setValue(QStringLiteral("paths/lastOpenDirectory"), path);
+    settings.setValue(QLatin1String(kLastOpenDirectoryKey), path);
+}
+
+QString recentEntryText(const QString &path, bool sourceIsFile)
+{
+    const QString nativePath = QDir::toNativeSeparators(path);
+    return sourceIsFile
+        ? QStringLiteral("影像文件: %1").arg(nativePath)
+        : QStringLiteral("医学影像包: %1").arg(nativePath);
 }
 }
 
@@ -161,6 +179,7 @@ void MainWindow::handleStudyLoadFinished()
     }
 
     m_currentPackage = result.package;
+    rememberRecentEntry(m_lastRequestedSourcePath, m_lastRequestedSourceIsFile);
     updateStatusBar(result.package);
     qInfo().noquote() << QStringLiteral("Study load succeeded. root=%1 models=%2 image=%3")
                              .arg(result.package.rootPath)
@@ -173,6 +192,8 @@ void MainWindow::beginStudyLoad(const QString &sourcePath, bool sourceIsFile)
     qInfo().noquote() << QStringLiteral("Begin study load. source=%1 sourceIsFile=%2")
                              .arg(sourcePath)
                              .arg(sourceIsFile ? QStringLiteral("true") : QStringLiteral("false"));
+    m_lastRequestedSourcePath = sourcePath;
+    m_lastRequestedSourceIsFile = sourceIsFile;
     ensureLoadingDialog();
     ++m_activeLoadId;
     m_loadCancelFlag = std::make_shared<std::atomic_bool>(false);
@@ -314,10 +335,114 @@ void MainWindow::createMenus()
     connect(m_openAction, &QAction::triggered, this, &MainWindow::openStudyPackage);
     fileMenu->addAction(m_openAction);
 
+    m_recentMenu = fileMenu->addMenu(QStringLiteral("最近浏览过的医学影像包"));
+    refreshRecentEntriesMenu();
+
+    fileMenu->addSeparator();
+
     auto *exitAction = new QAction(QStringLiteral("退出"), this);
     exitAction->setShortcut(QKeySequence::Quit);
     connect(exitAction, &QAction::triggered, this, &QWidget::close);
     fileMenu->addAction(exitAction);
+}
+
+void MainWindow::refreshRecentEntriesMenu()
+{
+    if (m_recentMenu == nullptr) {
+        return;
+    }
+
+    m_recentMenu->clear();
+
+    QSettings settings;
+    const QVariantList entries = settings.value(QLatin1String(kRecentEntriesKey)).toList();
+    if (entries.isEmpty()) {
+        auto *emptyAction = m_recentMenu->addAction(QStringLiteral("暂无最近记录"));
+        emptyAction->setEnabled(false);
+        return;
+    }
+
+    for (const QVariant &entryValue : entries) {
+        const QVariantMap entry = entryValue.toMap();
+        const QString path = entry.value(QLatin1String(kRecentEntryPathKey)).toString();
+        const bool sourceIsFile = entry.value(QLatin1String(kRecentEntryIsFileKey)).toBool();
+        if (path.isEmpty()) {
+            continue;
+        }
+
+        auto *action = m_recentMenu->addAction(recentEntryText(path, sourceIsFile));
+        action->setData(entry);
+        connect(action, &QAction::triggered, this, &MainWindow::openRecentEntry);
+    }
+
+    if (m_recentMenu->isEmpty()) {
+        auto *emptyAction = m_recentMenu->addAction(QStringLiteral("暂无最近记录"));
+        emptyAction->setEnabled(false);
+    }
+}
+
+void MainWindow::rememberRecentEntry(const QString &sourcePath, bool sourceIsFile)
+{
+    if (sourcePath.isEmpty()) {
+        return;
+    }
+
+    QSettings settings;
+    QVariantList entries = settings.value(QLatin1String(kRecentEntriesKey)).toList();
+    QVariantList updatedEntries;
+    QVariantMap newEntry;
+    newEntry.insert(QLatin1String(kRecentEntryPathKey), sourcePath);
+    newEntry.insert(QLatin1String(kRecentEntryIsFileKey), sourceIsFile);
+    updatedEntries.push_back(newEntry);
+
+    for (const QVariant &entryValue : entries) {
+        const QVariantMap entry = entryValue.toMap();
+        if (entry.value(QLatin1String(kRecentEntryPathKey)).toString() == sourcePath
+            && entry.value(QLatin1String(kRecentEntryIsFileKey)).toBool() == sourceIsFile) {
+            continue;
+        }
+        updatedEntries.push_back(entry);
+        if (updatedEntries.size() >= kMaxRecentEntries) {
+            break;
+        }
+    }
+
+    settings.setValue(QLatin1String(kRecentEntriesKey), updatedEntries);
+    refreshRecentEntriesMenu();
+}
+
+void MainWindow::openRecentEntry()
+{
+    if (m_loadWatcher->isRunning()) {
+        qWarning() << "Ignored openRecentEntry request while a load is already running.";
+        return;
+    }
+
+    const auto *action = qobject_cast<QAction *>(sender());
+    if (action == nullptr) {
+        return;
+    }
+
+    const QVariantMap entry = action->data().toMap();
+    const QString sourcePath = entry.value(QLatin1String(kRecentEntryPathKey)).toString();
+    const bool sourceIsFile = entry.value(QLatin1String(kRecentEntryIsFileKey)).toBool();
+    if (sourcePath.isEmpty()) {
+        return;
+    }
+
+    const QFileInfo fileInfo(sourcePath);
+    const bool exists = sourceIsFile ? fileInfo.isFile() : fileInfo.isDir();
+    if (!exists) {
+        qWarning().noquote() << QStringLiteral("Recent entry no longer exists: %1").arg(sourcePath);
+        QMessageBox::warning(this,
+                             QStringLiteral("最近记录不可用"),
+                             QStringLiteral("路径已不存在，无法打开：\n%1").arg(QDir::toNativeSeparators(sourcePath)));
+        return;
+    }
+
+    qInfo().noquote() << QStringLiteral("Opening recent entry: %1").arg(sourcePath);
+    rememberLastOpenDirectory(sourceIsFile ? fileInfo.absolutePath() : sourcePath);
+    beginStudyLoad(sourcePath, sourceIsFile);
 }
 
 void MainWindow::updateStatusBar(const StudyPackage &package)

@@ -15,6 +15,7 @@ class QAction;
 class QDialog;
 class FourPaneViewer;
 class QLabel;
+class QMenu;
 class QProgressBar;
 class QPushButton;
 
@@ -31,12 +32,15 @@ private slots:
     void openImageFile();
     void handleStudyLoadFinished();
     void cancelStudyLoad();
+    void openRecentEntry();
 
 private:
     void beginStudyLoad(const QString &sourcePath, bool sourceIsFile);
     void ensureLoadingDialog();
     void updateLoadingProgress(const QString &message, int percent);
     void createMenus();
+    void refreshRecentEntriesMenu();
+    void rememberRecentEntry(const QString &sourcePath, bool sourceIsFile);
     void updateStatusBar(const StudyPackage &package);
     void showPackageError(const QString &message);
 
@@ -49,7 +53,10 @@ private:
     QLabel *m_loadingMessageLabel;
     QProgressBar *m_loadingProgressBar;
     QPushButton *m_loadingCancelButton;
+    QMenu *m_recentMenu;
     StudyPackage m_currentPackage;
+    QString m_lastRequestedSourcePath;
+    bool m_lastRequestedSourceIsFile = false;
     std::shared_ptr<std::atomic_bool> m_loadCancelFlag;
     int m_activeLoadId = 0;
 };
