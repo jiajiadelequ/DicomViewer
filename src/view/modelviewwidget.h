@@ -66,6 +66,7 @@ private:
     void initializeClippingWidget();
     void teardownClippingWidget();
     void updateClippedModels();
+    static void handleBoxWidgetInteractionEnd(vtkObject *caller, unsigned long eventId, void *clientData, void *callData);
     static void handleBoxWidgetInteraction(vtkObject *caller, unsigned long eventId, void *clientData, void *callData);
 
     void setCursorWorldPositionInternal(const std::array<double, 3> &worldPosition, bool emitSignal);
@@ -82,6 +83,7 @@ private:
     vtkSmartPointer<vtkCallbackCommand> m_clippingCallback;
     std::vector<ModelEntry> m_models;
     bool m_clippingEnabled = false;
+    bool m_clippingPreviewDirty = false;
     bool m_sceneBatchActive = false;
     bool m_sceneNeedsRender = false;
     bool m_sceneNeedsCameraReset = false;

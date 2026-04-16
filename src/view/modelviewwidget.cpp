@@ -87,6 +87,7 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
     m_clippingCallback->SetClientData(this);
     m_clippingCallback->SetCallback(&ModelViewWidget::handleBoxWidgetInteraction);
     m_clippingWidget->AddObserver(vtkCommand::InteractionEvent, m_clippingCallback);
+    m_clippingWidget->AddObserver(vtkCommand::EndInteractionEvent, m_clippingCallback);
 
     headerLayout->addStretch(1);
     headerLayout->addWidget(m_cameraController->viewButton());
@@ -191,10 +192,12 @@ void ModelViewWidget::setClippingEnabled(bool enabled)
 
     m_clippingEnabled = enabled;
     if (m_clippingEnabled) {
+        m_clippingPreviewDirty = false;
         initializeClippingWidget();
         updateClippedModels();
         m_statusLabel->setText(QStringLiteral("模型裁剪已启用，可拖拽裁剪框调整裁剪区域"));
     } else {
+        m_clippingPreviewDirty = false;
         teardownClippingWidget();
         for (ModelEntry &entry : m_models) {
             if (entry.mapper != nullptr && entry.originalPolyData != nullptr) {
@@ -418,7 +421,6 @@ void ModelViewWidget::handleBoxWidgetInteraction(vtkObject *caller,
                                                  void *callData)
 {
     Q_UNUSED(caller);
-    Q_UNUSED(eventId);
     Q_UNUSED(callData);
 
     auto *self = static_cast<ModelViewWidget *>(clientData);
@@ -426,5 +428,36 @@ void ModelViewWidget::handleBoxWidgetInteraction(vtkObject *caller,
         return;
     }
 
+    if (eventId == vtkCommand::InteractionEvent) {
+        self->m_clippingPreviewDirty = true;
+        self->m_statusLabel->setText(QStringLiteral("正在调整裁剪框，松手后更新裁剪结果"));
+        return;
+    }
+
+    if (eventId == vtkCommand::EndInteractionEvent) {
+        self->handleBoxWidgetInteractionEnd(caller, eventId, clientData, callData);
+    }
+}
+
+void ModelViewWidget::handleBoxWidgetInteractionEnd(vtkObject *caller,
+                                                    unsigned long eventId,
+                                                    void *clientData,
+                                                    void *callData)
+{
+    Q_UNUSED(caller);
+    Q_UNUSED(eventId);
+    Q_UNUSED(callData);
+
+    auto *self = static_cast<ModelViewWidget *>(clientData);
+    if (self == nullptr || !self->m_clippingEnabled) {
+        return;
+    }
+
+    if (!self->m_clippingPreviewDirty) {
+        return;
+    }
+
+    self->m_clippingPreviewDirty = false;
     self->updateClippedModels();
+    self->m_statusLabel->setText(QStringLiteral("模型裁剪已更新，可继续拖拽裁剪框调整区域"));
 }
