@@ -32,6 +32,43 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "RelWithDebInfo DicomViewerSkeleton",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\build\\relwithdebinfo\\DicomViewerSkeleton.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "build-relwithdebinfo",
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "D:\\Qt5\\5.15.2\\msvc2019_64\\bin;${workspaceFolder}\\third_party\\VTK9.4\\bin;${workspaceFolder}\\third_party\\GDCM-3.0.26-install\\Release\\bin;${workspaceFolder}\\third_party\\ITK545i\\Release\\bin;${env:PATH}"
+        }
+      ],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "ASan Debug DicomViewerSkeleton",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\build\\asan\\DicomViewerSkeleton.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "build-asan",
+      "presentation": {
+        "hidden": true
+      },
+      "environment": [
+        {
+          "name": "PATH",
+          "value": "D:\\Qt5\\5.15.2\\msvc2019_64\\bin;${workspaceFolder}\\third_party\\VTK9.4\\bin;${workspaceFolder}\\third_party\\GDCM-3.0.26-install\\Debug\\bin;${workspaceFolder}\\third_party\\ITK545i\\Debug\\bin;${env:PATH}"
+        },
+        {
+          "name": "ASAN_OPTIONS",
+          "value": "handle_segv=1,abort_on_error=1,check_initialization_order=1,strict_string_checks=1"
+        }
+      ],
+      "console": "integratedTerminal"
+    },
+    {
       "name": "Publish And Run Release",
       "type": "cppvsdbg",
       "request": "launch",

@@ -11,6 +11,29 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(MEDPRO_ENABLE_CRASH_HANDLER "Enable in-process crash handling and minidump generation." ON)
+option(MEDPRO_ENABLE_QT_FILE_LOGGING "Enable Qt message logging to rolling session files." ON)
+option(MEDPRO_MSVC_ENABLE_ASAN "Enable AddressSanitizer for MSVC builds." OFF)
+
+if(MSVC AND MEDPRO_MSVC_ENABLE_ASAN)
+    foreach(flag_var
+            CMAKE_C_FLAGS_DEBUG
+            CMAKE_CXX_FLAGS_DEBUG
+            CMAKE_C_FLAGS_RELWITHDEBINFO
+            CMAKE_CXX_FLAGS_RELWITHDEBINFO)
+        if(DEFINED ${flag_var})
+            string(REPLACE "/RTC1" "" ${flag_var} "${${flag_var}}")
+            string(REPLACE "/RTCs" "" ${flag_var} "${${flag_var}}")
+            string(REPLACE "/RTCu" "" ${flag_var} "${${flag_var}}")
+        endif()
+    endforeach()
+endif()
+
+set(MEDPRO_EFFECTIVE_BUILD_KIND "${CMAKE_BUILD_TYPE}")
+if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+    set(MEDPRO_EFFECTIVE_BUILD_KIND "Release")
+endif()
+
 if(MSVC)
     add_compile_options("/source-charset:utf-8")
 endif()
@@ -34,12 +57,12 @@ find_package(VTK REQUIRED)
 
 set(MEDPRO_GDCM_VERSION "3.0.26" CACHE STRING "Bundled GDCM version")
 set(MEDPRO_GDCM_BASE_DIR "${PROJECT_SOURCE_DIR}/third_party/GDCM-${MEDPRO_GDCM_VERSION}-install" CACHE PATH "Path to the bundled GDCM install root")
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+if(MEDPRO_EFFECTIVE_BUILD_KIND STREQUAL "Debug")
     set(MEDPRO_GDCM_ROOT "${MEDPRO_GDCM_BASE_DIR}/Debug")
-elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+elseif(MEDPRO_EFFECTIVE_BUILD_KIND STREQUAL "Release")
     set(MEDPRO_GDCM_ROOT "${MEDPRO_GDCM_BASE_DIR}/Release")
 else()
-    set(MEDPRO_GDCM_ROOT "${MEDPRO_GDCM_BASE_DIR}/${CMAKE_BUILD_TYPE}")
+    set(MEDPRO_GDCM_ROOT "${MEDPRO_GDCM_BASE_DIR}/${MEDPRO_EFFECTIVE_BUILD_KIND}")
 endif()
 set(MEDPRO_GDCM_CONFIG_DIR "${MEDPRO_GDCM_ROOT}/lib/gdcm-3.0")
 if(EXISTS "${MEDPRO_GDCM_CONFIG_DIR}/GDCMConfig.cmake")
@@ -51,12 +74,12 @@ endif()
 
 set(MEDPRO_ITK_VERSION "5.4.5" CACHE STRING "Bundled ITK version")
 set(MEDPRO_ITK_BASE_DIR "${PROJECT_SOURCE_DIR}/third_party/ITK545i" CACHE PATH "Path to the bundled ITK install root")
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+if(MEDPRO_EFFECTIVE_BUILD_KIND STREQUAL "Debug")
     set(MEDPRO_ITK_ROOT "${MEDPRO_ITK_BASE_DIR}/Debug")
-elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+elseif(MEDPRO_EFFECTIVE_BUILD_KIND STREQUAL "Release")
     set(MEDPRO_ITK_ROOT "${MEDPRO_ITK_BASE_DIR}/Release")
 else()
-    set(MEDPRO_ITK_ROOT "${MEDPRO_ITK_BASE_DIR}/${CMAKE_BUILD_TYPE}")
+    set(MEDPRO_ITK_ROOT "${MEDPRO_ITK_BASE_DIR}/${MEDPRO_EFFECTIVE_BUILD_KIND}")
 endif()
 set(MEDPRO_ITK_CONFIG_DIR "${MEDPRO_ITK_ROOT}/lib/cmake/ITK-5.4")
 set(MEDPRO_ITK_COMPONENTS
@@ -105,6 +128,8 @@ set(PROJECT_SOURCES
     mainwindow.cpp
     mainwindow.h
     src/model/studypackage.h
+    src/core/runtime/crashhandler.h
+    src/core/runtime/crashhandler.cpp
     src/core/runtime/studyloadfeedback.h
     src/core/runtime/studyloadresult.h
     src/core/casepackagereader.h
@@ -153,6 +178,13 @@ else()
     endif()
 endif()
 
+if(MEDPRO_ENABLE_CRASH_HANDLER)
+    target_compile_definitions(DicomViewerSkeleton PRIVATE MEDPRO_ENABLE_CRASH_HANDLER=1)
+endif()
+if(MEDPRO_ENABLE_QT_FILE_LOGGING)
+    target_compile_definitions(DicomViewerSkeleton PRIVATE MEDPRO_ENABLE_QT_FILE_LOGGING=1)
+endif()
+
 target_link_libraries(DicomViewerSkeleton PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Widgets
@@ -181,11 +213,20 @@ target_include_directories(DicomViewerSkeleton PRIVATE
 if(MSVC)
     target_compile_options(DicomViewerSkeleton PRIVATE
         $<$<CONFIG:Release>:/Zi>
+        $<$<CONFIG:RelWithDebInfo>:/Zi>
     )
     target_link_options(DicomViewerSkeleton PRIVATE
         $<$<CONFIG:Release>:/DEBUG>
+        $<$<CONFIG:RelWithDebInfo>:/DEBUG>
     )
     set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /DEBUG")
+    target_link_libraries(DicomViewerSkeleton PRIVATE Dbghelp)
+
+    if(MEDPRO_MSVC_ENABLE_ASAN)
+        target_compile_options(DicomViewerSkeleton PRIVATE /fsanitize=address /Zi)
+        target_link_options(DicomViewerSkeleton PRIVATE /fsanitize=address /INCREMENTAL:NO)
+        target_compile_definitions(DicomViewerSkeleton PRIVATE MEDPRO_MSVC_ENABLE_ASAN=1)
+    endif()
 endif()
 
 set(MEDPRO_OPENSSL_ROOT "${CMAKE_SOURCE_DIR}/OpenSSL_libs" CACHE PATH "Path to the bundled OpenSSL DLLs")
@@ -216,9 +257,9 @@ if(QuaZip-Qt5_FOUND)
     endif()
 endif()
 
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+if(MEDPRO_EFFECTIVE_BUILD_KIND STREQUAL "Debug")
     file(GLOB VTK_DLLS "${MEDPRO_VTK_ROOT}/bin/vtk*9.4d.dll")
-elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+elseif(MEDPRO_EFFECTIVE_BUILD_KIND STREQUAL "Release")
     file(GLOB VTK_DLLS "${MEDPRO_VTK_ROOT}/bin/vtk*9.4.dll")
 endif()
 

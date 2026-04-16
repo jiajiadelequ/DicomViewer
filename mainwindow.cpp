@@ -6,7 +6,9 @@
 #include <QAction>
 #include <QApplication>
 #include <QDialog>
+#include <QDebug>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFutureWatcher>
 #include <QKeySequence>
 #include <QLabel>
@@ -83,6 +85,7 @@ void rememberLastOpenDirectory(const QString &path)
 void MainWindow::openStudyPackage()
 {
     if (m_loadWatcher->isRunning()) {
+        qWarning() << "Ignored openStudyPackage request while a load is already running.";
         return;
     }
 
@@ -91,9 +94,11 @@ void MainWindow::openStudyPackage()
         QStringLiteral("选择病例包目录"),
         lastOpenDirectory());
     if (rootPath.isEmpty()) {
+        qInfo() << "Open study package canceled by user.";
         return;
     }
 
+    qInfo().noquote() << QStringLiteral("Selected study package directory: %1").arg(rootPath);
     rememberLastOpenDirectory(rootPath);
     beginStudyLoad(rootPath, false);
 }
@@ -101,6 +106,7 @@ void MainWindow::openStudyPackage()
 void MainWindow::openImageFile()
 {
     if (m_loadWatcher->isRunning()) {
+        qWarning() << "Ignored openImageFile request while a load is already running.";
         return;
     }
 
@@ -110,9 +116,11 @@ void MainWindow::openImageFile()
         lastOpenDirectory(),
         QStringLiteral("NIfTI Files (*.nii *.nii.gz);;All Files (*.*)"));
     if (filePath.isEmpty()) {
+        qInfo() << "Open image file canceled by user.";
         return;
     }
 
+    qInfo().noquote() << QStringLiteral("Selected image file: %1").arg(filePath);
     rememberLastOpenDirectory(QFileInfo(filePath).absolutePath());
     beginStudyLoad(filePath, true);
 }
@@ -132,6 +140,7 @@ void MainWindow::handleStudyLoadFinished()
     const StudyLoadResult result = m_loadWatcher->result();
     m_loadCancelFlag.reset();
     if (result.cancelled) {
+        qWarning() << "Study load was cancelled.";
         if (!m_currentPackage.isValid()) {
             m_viewer->showEmptyState();
             updateStatusBar(StudyPackage {});
@@ -142,6 +151,7 @@ void MainWindow::handleStudyLoadFinished()
 
     QString errorMessage = result.errorMessage;
     if (!result.succeeded() || !m_viewer->applyStudyLoadResult(result, &errorMessage)) {
+        qCritical().noquote() << QStringLiteral("Study load failed: %1").arg(errorMessage);
         if (!m_currentPackage.isValid()) {
             m_viewer->showErrorState(errorMessage);
             updateStatusBar(StudyPackage {});
@@ -152,10 +162,17 @@ void MainWindow::handleStudyLoadFinished()
 
     m_currentPackage = result.package;
     updateStatusBar(result.package);
+    qInfo().noquote() << QStringLiteral("Study load succeeded. root=%1 models=%2 image=%3")
+                             .arg(result.package.rootPath)
+                             .arg(result.models.size())
+                             .arg(result.imageData != nullptr ? QStringLiteral("yes") : QStringLiteral("no"));
 }
 
 void MainWindow::beginStudyLoad(const QString &sourcePath, bool sourceIsFile)
 {
+    qInfo().noquote() << QStringLiteral("Begin study load. source=%1 sourceIsFile=%2")
+                             .arg(sourcePath)
+                             .arg(sourceIsFile ? QStringLiteral("true") : QStringLiteral("false"));
     ensureLoadingDialog();
     ++m_activeLoadId;
     m_loadCancelFlag = std::make_shared<std::atomic_bool>(false);
@@ -205,9 +222,22 @@ void MainWindow::beginStudyLoad(const QString &sourcePath, bool sourceIsFile)
     };
 
     m_loadWatcher->setFuture(QtConcurrent::run([sourcePath, sourceIsFile, feedback]() {
-        return sourceIsFile
-            ? StudyLoader::loadFromFile(sourcePath, feedback)
-            : StudyLoader::loadFromDirectory(sourcePath, feedback);
+        try {
+            return sourceIsFile
+                ? StudyLoader::loadFromFile(sourcePath, feedback)
+                : StudyLoader::loadFromDirectory(sourcePath, feedback);
+        } catch (const std::exception &ex) {
+            qCritical().noquote() << QStringLiteral("Unhandled exception during background study load: %1")
+                                         .arg(QString::fromLocal8Bit(ex.what()));
+            StudyLoadResult result;
+            result.errorMessage = QStringLiteral("后台加载发生未处理异常: %1").arg(QString::fromLocal8Bit(ex.what()));
+            return result;
+        } catch (...) {
+            qCritical() << "Unhandled unknown exception during background study load.";
+            StudyLoadResult result;
+            result.errorMessage = QStringLiteral("后台加载发生未知未处理异常。");
+            return result;
+        }
     }));
 }
 
@@ -252,6 +282,7 @@ void MainWindow::cancelStudyLoad()
         return;
     }
 
+    qWarning() << "Cancel requested for current study load.";
     m_loadCancelFlag->store(true);
     m_loadingCancelButton->setEnabled(false);
     m_loadingCancelButton->setText(QStringLiteral("正在取消..."));

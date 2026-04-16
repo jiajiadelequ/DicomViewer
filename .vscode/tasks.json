@@ -22,6 +22,23 @@
       ]
     },
     {
+      "label": "build-relwithdebinfo",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.vscode\\build-relwithdebinfo-msvc.cmd",
+      "problemMatcher": [
+        "$msCompile"
+      ]
+    },
+    {
+      "label": "build-asan",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.vscode\\build-asan-msvc.cmd",
+      "detail": "Experimental only. Full-app ASan is currently blocked by prebuilt third-party library ABI/runtime mismatches.",
+      "problemMatcher": [
+        "$msCompile"
+      ]
+    },
+    {
       "label": "publish-release",
       "type": "shell",
       "command": "${workspaceFolder}\\.vscode\\publish-release-msvc.cmd",

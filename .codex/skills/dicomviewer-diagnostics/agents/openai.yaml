@@ -1,0 +1,5 @@
+version: 1
+interface:
+  display_name: DicomViewer Diagnostics
+  short_description: 排查当前 DicomViewer 项目的崩溃、不稳定和查错配置
+  default_prompt: 使用 dicomviewer-diagnostics skill 排查当前 DicomViewer 项目的崩溃、不稳定、日志、dump、PDB、WER 或 ASan 相关问题。
