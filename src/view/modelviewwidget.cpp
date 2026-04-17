@@ -1,5 +1,6 @@
 #include "modelviewwidget.h"
 
+#include "modelclippingcontroller.h"
 #include "modelviewcameracontroller.h"
 #include "modelviewcrosshaircontroller.h"
 
@@ -15,12 +16,7 @@
 #include <QVTKOpenGLNativeWidget.h>
 
 #include <vtkActor.h>
-#include <vtkBoxRepresentation.h>
-#include <vtkBoxWidget2.h>
-#include <vtkCallbackCommand.h>
-#include <vtkCellPicker.h>
 #include <vtkClipClosedSurface.h>
-#include <vtkCommand.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <vtkImageData.h>
 #include <vtkInteractorStyleTrackballCamera.h>
@@ -29,64 +25,9 @@
 #include <vtkPlanes.h>
 #include <vtkPolyData.h>
 #include <vtkPolyDataMapper.h>
-#include <vtkProp.h>
-#include <vtkPropCollection.h>
 #include <vtkProperty.h>
 #include <vtkRenderer.h>
 #include <vtkRenderWindowInteractor.h>
-
-namespace
-{
-std::array<double, 2> widgetPositionToDisplayPosition(QVTKOpenGLNativeWidget *widget, const QPoint &position)
-{
-    const double devicePixelRatio = widget != nullptr ? widget->devicePixelRatioF() : 1.0;
-    const double displayX = std::lround(position.x() * devicePixelRatio);
-    const double displayY = std::lround((widget->height() - 1 - position.y()) * devicePixelRatio);
-    return { displayX, displayY };
-}
-
-int faceInteractionStateFromDisplayPosition(vtkBoxRepresentation *representation,
-                                            vtkRenderer *renderer,
-                                            double displayX,
-                                            double displayY)
-{
-    if (representation == nullptr || renderer == nullptr) {
-        return vtkBoxRepresentation::Outside;
-    }
-
-    auto picker = vtkSmartPointer<vtkCellPicker>::New();
-    picker->SetTolerance(0.0005);
-    picker->PickFromListOn();
-
-    auto props = vtkSmartPointer<vtkPropCollection>::New();
-    representation->GetActors(props);
-    props->InitTraversal();
-    while (auto *prop = props->GetNextProp()) {
-        picker->AddPickList(prop);
-    }
-
-    if (picker->Pick(displayX, displayY, 0.0, renderer) == 0) {
-        return vtkBoxRepresentation::Outside;
-    }
-
-    auto pickedPosition = picker->GetPickPosition();
-    int closestFaceState = vtkBoxRepresentation::Outside;
-    double closestDistance = std::numeric_limits<double>::max();
-    for (int faceIndex = 0; faceIndex < 6; ++faceIndex) {
-        vtkPlane *plane = representation->GetUnderlyingPlane(faceIndex);
-        if (plane == nullptr) {
-            continue;
-        }
-        const double distance = std::abs(plane->DistanceToPlane(pickedPosition));
-        if (distance < closestDistance) {
-            closestDistance = distance;
-            closestFaceState = vtkBoxRepresentation::MoveF0 + faceIndex;
-        }
-    }
-
-    return closestFaceState;
-}
-}
 
 ModelViewWidget::ModelViewWidget(QWidget *parent)
     : QWidget(parent)
@@ -94,10 +35,9 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
     , m_maximizeButton(new QToolButton(this))
     , m_vtkWidget(new QVTKOpenGLNativeWidget(this))
     , m_cameraController(nullptr)
+    , m_clippingController(nullptr)
     , m_crosshairController(nullptr)
     , m_renderer(vtkSmartPointer<vtkRenderer>::New())
-    , m_clippingWidget(vtkSmartPointer<vtkBoxWidget2>::New())
-    , m_clippingCallback(vtkSmartPointer<vtkCallbackCommand>::New())
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -121,35 +61,19 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
     m_renderer->SetBackground(0.93, 0.95, 0.98);
 
     m_cameraController = std::make_unique<ModelViewCameraController>(this, m_renderer, m_vtkWidget->interactor());
+    m_clippingController = std::make_unique<ModelClippingController>(m_vtkWidget, m_renderer);
     m_crosshairController = std::make_unique<ModelViewCrosshairController>(m_renderer);
     m_cameraController->setBoundsProvider([this](ModelViewCameraController::BoundsArray &bounds) {
         return m_crosshairController != nullptr && m_crosshairController->cameraBounds(bounds.data());
     });
-
-    auto clippingRepresentation = vtkSmartPointer<vtkBoxRepresentation>::New();
-    clippingRepresentation->SetPlaceFactor(1.0);
-    clippingRepresentation->HandlesOff();
-    clippingRepresentation->OutlineFaceWiresOff();
-    clippingRepresentation->OutlineCursorWiresOff();
-    clippingRepresentation->GetOutlineProperty()->SetColor(0.86, 0.25, 0.18);
-    clippingRepresentation->GetOutlineProperty()->SetLineWidth(2.0f);
-    clippingRepresentation->GetSelectedOutlineProperty()->SetColor(1.0, 0.54, 0.24);
-    clippingRepresentation->GetSelectedOutlineProperty()->SetLineWidth(3.0f);
-    clippingRepresentation->GetFaceProperty()->SetColor(0.86, 0.25, 0.18);
-    clippingRepresentation->GetFaceProperty()->SetOpacity(0.04);
-    clippingRepresentation->GetSelectedFaceProperty()->SetColor(1.0, 0.54, 0.24);
-    clippingRepresentation->GetSelectedFaceProperty()->SetOpacity(0.18);
-    m_clippingWidget->SetRepresentation(clippingRepresentation);
-    m_clippingWidget->SetInteractor(m_vtkWidget->interactor());
-    m_clippingWidget->SetCurrentRenderer(m_renderer);
-    m_clippingWidget->RotationEnabledOn();
-    m_clippingWidget->ScalingEnabledOn();
-    m_clippingWidget->MoveFacesEnabledOn();
-    m_clippingWidget->SetPriority(1.0f);
-    m_clippingCallback->SetClientData(this);
-    m_clippingCallback->SetCallback(&ModelViewWidget::handleBoxWidgetInteraction);
-    m_clippingWidget->AddObserver(vtkCommand::InteractionEvent, m_clippingCallback);
-    m_clippingWidget->AddObserver(vtkCommand::EndInteractionEvent, m_clippingCallback);
+    m_clippingController->setStatusHandler([this](const QString &message) {
+        if (m_statusLabel != nullptr) {
+            m_statusLabel->setText(message);
+        }
+    });
+    m_clippingController->setCommitHandler([this]() {
+        updateClippedModels();
+    });
 
     headerLayout->addStretch(1);
     headerLayout->addWidget(m_cameraController->viewButton());
@@ -178,7 +102,9 @@ void ModelViewWidget::endSceneBatch(const QString &message)
 
 void ModelViewWidget::clearScene(const QString &message)
 {
-    teardownClippingWidget();
+    if (m_clippingController != nullptr) {
+        m_clippingController->deactivate();
+    }
     m_models.clear();
     m_crosshairController->clearScene();
     m_statusLabel->setText(message);
@@ -246,27 +172,27 @@ void ModelViewWidget::setCrosshairEnabled(bool enabled)
 void ModelViewWidget::setClippingEnabled(bool enabled)
 {
     if (m_clippingEnabled == enabled) {
-        if (enabled) {
-            initializeClippingWidget();
+        if (enabled && m_clippingController != nullptr) {
+            m_clippingController->activate([this](double bounds[6]) {
+                return m_crosshairController != nullptr && m_crosshairController->cameraBounds(bounds);
+            });
         }
         return;
     }
 
     m_clippingEnabled = enabled;
     if (m_clippingEnabled) {
-        m_clippingPreviewDirty = false;
-        m_manualClippingFaceDragActive = false;
-        m_manualClippingInteractionState = vtkBoxRepresentation::Outside;
-        m_hoveredClippingInteractionState = vtkBoxRepresentation::Outside;
-        initializeClippingWidget();
+        if (m_clippingController != nullptr) {
+            m_clippingController->activate([this](double bounds[6]) {
+                return m_crosshairController != nullptr && m_crosshairController->cameraBounds(bounds);
+            });
+        }
         updateClippedModels();
         m_statusLabel->setText(QStringLiteral("模型裁剪已启用，拖拽面可伸缩裁剪框，空白处左键可旋转视角"));
     } else {
-        m_clippingPreviewDirty = false;
-        m_manualClippingFaceDragActive = false;
-        m_manualClippingInteractionState = vtkBoxRepresentation::Outside;
-        m_hoveredClippingInteractionState = vtkBoxRepresentation::Outside;
-        teardownClippingWidget();
+        if (m_clippingController != nullptr) {
+            m_clippingController->deactivate();
+        }
         for (ModelEntry &entry : m_models) {
             if (entry.mapper != nullptr && entry.originalPolyData != nullptr) {
                 entry.mapper->SetInputData(entry.originalPolyData);
@@ -314,34 +240,10 @@ bool ModelViewWidget::eventFilter(QObject *watched, QEvent *event)
     }
     case QEvent::MouseButtonPress: {
         if (m_clippingEnabled) {
-            auto *mouseEvent = static_cast<QMouseEvent *>(event);
-            if (mouseEvent->button() == Qt::LeftButton) {
-                auto *representation = vtkBoxRepresentation::SafeDownCast(m_clippingWidget->GetRepresentation());
-                if (representation != nullptr) {
-                    const auto displayPosition = widgetPositionToDisplayPosition(m_vtkWidget, mouseEvent->pos());
-                    int interactionState = representation->ComputeInteractionState(static_cast<int>(displayPosition[0]),
-                                                                                   static_cast<int>(displayPosition[1]));
-                    if (interactionState == vtkBoxRepresentation::Rotating) {
-                        interactionState = faceInteractionStateFromDisplayPosition(representation,
-                                                                                   m_renderer,
-                                                                                   displayPosition[0],
-                                                                                   displayPosition[1]);
-                    }
-                    if (interactionState >= vtkBoxRepresentation::MoveF0
-                        && interactionState <= vtkBoxRepresentation::MoveF5) {
-                        double eventPosition[2] { displayPosition[0], displayPosition[1] };
-                        m_manualClippingFaceDragActive = true;
-                        m_manualClippingInteractionState = interactionState;
-                        representation->SetInteractionState(interactionState);
-                        representation->StartWidgetInteraction(eventPosition);
-                        m_clippingPreviewDirty = true;
-                        m_statusLabel->setText(QStringLiteral("正在拖拽裁剪框的面，松手后更新裁剪结果"));
-                        m_vtkWidget->renderWindow()->Render();
-                        return true;
-                    }
-                }
+            if (m_clippingController != nullptr && m_clippingController->handleViewportEvent(event)) {
+                return true;
             }
-            break;
+            return QWidget::eventFilter(watched, event);
         }
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
         if (mouseEvent->button() != Qt::LeftButton) {
@@ -358,35 +260,10 @@ bool ModelViewWidget::eventFilter(QObject *watched, QEvent *event)
     }
     case QEvent::MouseMove: {
         if (m_clippingEnabled) {
-            auto *representation = vtkBoxRepresentation::SafeDownCast(m_clippingWidget->GetRepresentation());
-            const auto *mouseEvent = static_cast<QMouseEvent *>(event);
-            if (m_manualClippingFaceDragActive) {
-                if (representation != nullptr) {
-                    const auto displayPosition = widgetPositionToDisplayPosition(m_vtkWidget, mouseEvent->pos());
-                    double eventPosition[2] { displayPosition[0], displayPosition[1] };
-                    representation->SetInteractionState(m_manualClippingInteractionState);
-                    representation->WidgetInteraction(eventPosition);
-                    m_vtkWidget->renderWindow()->Render();
-                    return true;
-                }
+            if (m_clippingController != nullptr && m_clippingController->handleViewportEvent(event)) {
+                return true;
             }
-            if (representation != nullptr) {
-                const auto displayPosition = widgetPositionToDisplayPosition(m_vtkWidget, mouseEvent->pos());
-                int interactionState = representation->ComputeInteractionState(static_cast<int>(displayPosition[0]),
-                                                                               static_cast<int>(displayPosition[1]));
-                if (interactionState == vtkBoxRepresentation::Rotating) {
-                    interactionState = faceInteractionStateFromDisplayPosition(representation,
-                                                                               m_renderer,
-                                                                               displayPosition[0],
-                                                                               displayPosition[1]);
-                }
-                if (interactionState != m_hoveredClippingInteractionState) {
-                    m_hoveredClippingInteractionState = interactionState;
-                    representation->SetInteractionState(interactionState);
-                    m_vtkWidget->renderWindow()->Render();
-                }
-            }
-            break;
+            return QWidget::eventFilter(watched, event);
         }
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
         ModelViewCrosshairController::Axis worldPosition;
@@ -402,23 +279,10 @@ bool ModelViewWidget::eventFilter(QObject *watched, QEvent *event)
     }
     case QEvent::MouseButtonRelease: {
         if (m_clippingEnabled) {
-            auto *mouseEvent = static_cast<QMouseEvent *>(event);
-            if (m_manualClippingFaceDragActive && mouseEvent->button() == Qt::LeftButton) {
-                auto *representation = vtkBoxRepresentation::SafeDownCast(m_clippingWidget->GetRepresentation());
-                m_manualClippingFaceDragActive = false;
-                m_manualClippingInteractionState = vtkBoxRepresentation::Outside;
-                m_hoveredClippingInteractionState = vtkBoxRepresentation::Outside;
-                if (representation != nullptr) {
-                    representation->SetInteractionState(vtkBoxRepresentation::Outside);
-                }
-                if (m_clippingPreviewDirty) {
-                    updateClippedModels();
-                    m_clippingPreviewDirty = false;
-                }
-                m_statusLabel->setText(QStringLiteral("模型裁剪已更新，可继续拖拽面伸缩裁剪框，空白处左键可旋转视角"));
+            if (m_clippingController != nullptr && m_clippingController->handleViewportEvent(event)) {
                 return true;
             }
-            break;
+            return QWidget::eventFilter(watched, event);
         }
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
         if (m_crosshairController->endInteraction(mouseEvent->button() == Qt::LeftButton)) {
@@ -427,13 +291,11 @@ bool ModelViewWidget::eventFilter(QObject *watched, QEvent *event)
         break;
     }
     case QEvent::Leave: {
-        if (m_clippingEnabled && !m_manualClippingFaceDragActive) {
-            auto *representation = vtkBoxRepresentation::SafeDownCast(m_clippingWidget->GetRepresentation());
-            m_hoveredClippingInteractionState = vtkBoxRepresentation::Outside;
-            if (representation != nullptr) {
-                representation->SetInteractionState(vtkBoxRepresentation::Outside);
-                m_vtkWidget->renderWindow()->Render();
+        if (m_clippingEnabled) {
+            if (m_clippingController != nullptr) {
+                (void)m_clippingController->handleViewportEvent(event);
             }
+            return QWidget::eventFilter(watched, event);
         }
         break;
     }
@@ -492,46 +354,16 @@ void ModelViewWidget::flushQueuedSceneUpdate()
     m_sceneNeedsCameraReset = false;
 }
 
-void ModelViewWidget::initializeClippingWidget()
-{
-    if (!m_clippingEnabled || m_models.empty() || m_clippingWidget == nullptr) {
-        return;
-    }
-
-    double bounds[6] { 0.0, -1.0, 0.0, -1.0, 0.0, -1.0 };
-    if (!m_crosshairController->cameraBounds(bounds)) {
-        return;
-    }
-
-    auto *representation = vtkBoxRepresentation::SafeDownCast(m_clippingWidget->GetRepresentation());
-    if (representation == nullptr) {
-        return;
-    }
-
-    representation->PlaceWidget(bounds);
-    m_clippingWidget->On();
-}
-
-void ModelViewWidget::teardownClippingWidget()
-{
-    if (m_clippingWidget != nullptr) {
-        m_clippingWidget->Off();
-    }
-}
-
 void ModelViewWidget::updateClippedModels()
 {
-    if (!m_clippingEnabled || m_models.empty() || m_clippingWidget == nullptr) {
-        return;
-    }
-
-    auto *representation = vtkBoxRepresentation::SafeDownCast(m_clippingWidget->GetRepresentation());
-    if (representation == nullptr) {
+    if (!m_clippingEnabled || m_models.empty() || m_clippingController == nullptr) {
         return;
     }
 
     auto boxPlanes = vtkSmartPointer<vtkPlanes>::New();
-    representation->GetPlanes(boxPlanes);
+    if (!m_clippingController->copyPlanesTo(boxPlanes)) {
+        return;
+    }
 
     auto clippingPlanes = vtkSmartPointer<vtkPlaneCollection>::New();
     for (int planeIndex = 0; planeIndex < boxPlanes->GetNumberOfPlanes(); ++planeIndex) {
@@ -563,51 +395,4 @@ void ModelViewWidget::updateClippedModels()
 
     m_crosshairController->updateGeometry();
     queueSceneUpdate(false);
-}
-
-void ModelViewWidget::handleBoxWidgetInteraction(vtkObject *caller,
-                                                 unsigned long eventId,
-                                                 void *clientData,
-                                                 void *callData)
-{
-    Q_UNUSED(caller);
-    Q_UNUSED(callData);
-
-    auto *self = static_cast<ModelViewWidget *>(clientData);
-    if (self == nullptr) {
-        return;
-    }
-
-    if (eventId == vtkCommand::InteractionEvent) {
-        self->m_clippingPreviewDirty = true;
-        self->m_statusLabel->setText(QStringLiteral("正在调整裁剪框，松手后更新裁剪结果"));
-        return;
-    }
-
-    if (eventId == vtkCommand::EndInteractionEvent) {
-        self->handleBoxWidgetInteractionEnd(caller, eventId, clientData, callData);
-    }
-}
-
-void ModelViewWidget::handleBoxWidgetInteractionEnd(vtkObject *caller,
-                                                    unsigned long eventId,
-                                                    void *clientData,
-                                                    void *callData)
-{
-    Q_UNUSED(caller);
-    Q_UNUSED(eventId);
-    Q_UNUSED(callData);
-
-    auto *self = static_cast<ModelViewWidget *>(clientData);
-    if (self == nullptr || !self->m_clippingEnabled) {
-        return;
-    }
-
-    if (!self->m_clippingPreviewDirty) {
-        return;
-    }
-
-    self->m_clippingPreviewDirty = false;
-    self->updateClippedModels();
-    self->m_statusLabel->setText(QStringLiteral("模型裁剪已更新，可继续拖拽面伸缩裁剪框，空白处左键可旋转视角"));
 }

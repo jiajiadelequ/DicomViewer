@@ -150,6 +150,8 @@ set(PROJECT_SOURCES
     src/view/mprwindowlevelcontroller.cpp
     src/view/modelviewcameracontroller.h
     src/view/modelviewcameracontroller.cpp
+    src/view/modelclippingcontroller.h
+    src/view/modelclippingcontroller.cpp
     src/view/modelviewcrosshaircontroller.h
     src/view/modelviewcrosshaircontroller.cpp
     src/view/fourpanecontentwidget.h

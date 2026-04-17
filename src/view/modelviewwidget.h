@@ -17,13 +17,10 @@ class QPoint;
 class QVTKOpenGLNativeWidget;
 class QToolButton;
 class ModelViewCameraController;
+class ModelClippingController;
 class ModelViewCrosshairController;
 class vtkActor;
-class vtkBoxWidget2;
-class vtkCallbackCommand;
-class vtkPlanes;
 class vtkImageData;
-class vtkObject;
 class vtkPolyDataMapper;
 class vtkPolyData;
 class vtkRenderer;
@@ -63,11 +60,7 @@ private:
         vtkSmartPointer<vtkPolyData> originalPolyData;
     };
 
-    void initializeClippingWidget();
-    void teardownClippingWidget();
     void updateClippedModels();
-    static void handleBoxWidgetInteractionEnd(vtkObject *caller, unsigned long eventId, void *clientData, void *callData);
-    static void handleBoxWidgetInteraction(vtkObject *caller, unsigned long eventId, void *clientData, void *callData);
 
     void setCursorWorldPositionInternal(const std::array<double, 3> &worldPosition, bool emitSignal);
     void queueSceneUpdate(bool resetCamera);
@@ -77,16 +70,11 @@ private:
     QToolButton *m_maximizeButton;
     QVTKOpenGLNativeWidget *m_vtkWidget;
     std::unique_ptr<ModelViewCameraController> m_cameraController;
+    std::unique_ptr<ModelClippingController> m_clippingController;
     std::unique_ptr<ModelViewCrosshairController> m_crosshairController;
     vtkSmartPointer<vtkRenderer> m_renderer;
-    vtkSmartPointer<vtkBoxWidget2> m_clippingWidget;
-    vtkSmartPointer<vtkCallbackCommand> m_clippingCallback;
     std::vector<ModelEntry> m_models;
     bool m_clippingEnabled = false;
-    bool m_clippingPreviewDirty = false;
-    bool m_manualClippingFaceDragActive = false;
-    int m_manualClippingInteractionState = 0;
-    int m_hoveredClippingInteractionState = 0;
     bool m_sceneBatchActive = false;
     bool m_sceneNeedsRender = false;
     bool m_sceneNeedsCameraReset = false;
