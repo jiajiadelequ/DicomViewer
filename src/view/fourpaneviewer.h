@@ -39,6 +39,7 @@ private:
     FourPaneContentWidget *m_contentPage;
     vtkSmartPointer<vtkImageData> m_imageData;
     bool m_hasImageData = false;
+    bool m_hasModelData = false;
     bool m_crosshairEnabled = false;
     bool m_rulerEnabled = false;
     bool m_clippingEnabled = false;

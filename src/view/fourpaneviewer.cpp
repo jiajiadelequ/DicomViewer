@@ -110,6 +110,7 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
     const QString modelSummaryText = result.models.empty()
         ? QStringLiteral("未发现模型文件")
         : QStringLiteral("已发现 %1 个模型文件").arg(static_cast<int>(result.models.size()));
+    m_hasModelData = !result.models.empty();
     sidebarPanel->clearObjects();
     setClippingEnabled(false);
     volumePanel->beginSceneBatch(modelSummaryText);
@@ -120,6 +121,7 @@ bool FourPaneViewer::applyStudyLoadResult(const StudyLoadResult &result, QString
     }
     volumePanel->endSceneBatch(modelSummaryText);
     sidebarPanel->setClippingState(volumePanel->hasModels(), false);
+    setRulerEnabled(m_rulerEnabled);
 
     sidebarPanel->setSummaryText(buildStudySummaryText(result.package));
     m_rootLayout->setCurrentWidget(m_contentPage);
@@ -212,17 +214,20 @@ void FourPaneViewer::setCrosshairEnabled(bool enabled)
 
 void FourPaneViewer::setRulerEnabled(bool enabled)
 {
-    const bool actualEnabled = enabled && m_hasImageData;
+    const bool actualEnabled = enabled && (m_hasImageData || m_hasModelData);
     m_rulerEnabled = actualEnabled;
 
     if (m_contentPage != nullptr) {
-        m_contentPage->sidebarPanel()->setRulerState(m_hasImageData, actualEnabled);
+        m_contentPage->sidebarPanel()->setRulerState(m_hasImageData || m_hasModelData, actualEnabled);
     }
 
     for (MprViewWidget *panel : mprPanels(m_contentPage)) {
         if (panel != nullptr) {
             panel->setRulerEnabled(actualEnabled);
         }
+    }
+    if (m_contentPage != nullptr && m_contentPage->volumePanel() != nullptr) {
+        m_contentPage->volumePanel()->setRulerEnabled(actualEnabled);
     }
 }
 

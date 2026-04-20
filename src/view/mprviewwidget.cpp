@@ -90,7 +90,6 @@ MprViewWidget::MprViewWidget(const QString &title, Orientation orientation, QWid
     m_renderer->AddActor(m_imageActor);
     m_renderer->AddActor(m_crosshairController->actor());
     m_renderer->AddActor(m_rulerController->actor());
-    m_renderer->AddActor2D(m_rulerController->textActor());
     m_vtkWidget->renderWindow()->AddRenderer(m_renderer);
     resetCamera();
 
@@ -245,6 +244,15 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
         }
 
         if (m_rulerEnabled && mouseEvent->modifiers() == Qt::NoModifier) {
+            if (m_rulerController->beginNodeDrag(m_renderer,
+                                                 m_vtkWidget,
+                                                 mouseEvent->pos(),
+                                                 m_sliceGeometry,
+                                                 m_slider->value())) {
+                renderCurrentState(false);
+                return true;
+            }
+
             if (m_rulerController->recordPoint(m_renderer,
                                                m_vtkWidget,
                                                mouseEvent->pos(),
@@ -284,6 +292,15 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
 
         if (m_rulerEnabled && mouseEvent->modifiers() == Qt::NoModifier) {
+            if (m_rulerController->updateNodeDrag(m_renderer,
+                                                  m_vtkWidget,
+                                                  mouseEvent->pos(),
+                                                  m_sliceGeometry,
+                                                  m_slider->value())) {
+                renderCurrentState(false);
+                return true;
+            }
+
             if (m_rulerController->updateHoverPoint(m_renderer,
                                                     m_vtkWidget,
                                                     mouseEvent->pos(),
@@ -322,6 +339,10 @@ bool MprViewWidget::eventFilter(QObject *watched, QEvent *event)
     }
     case QEvent::MouseButtonRelease: {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::LeftButton && m_rulerController->endNodeDrag()) {
+            renderCurrentState(false);
+            return true;
+        }
         if (m_crosshairController->endInteraction(mouseEvent->button() == Qt::LeftButton)) {
             return true;
         }
@@ -448,7 +469,7 @@ void MprViewWidget::renderCurrentState(bool fitViewport)
     applyCurrentSlice(m_slider->value());
     m_crosshairController->updateGeometry(m_cursorWorldPosition, m_sliceGeometry, m_slider->value());
     m_rulerController->setVisible(m_rulerEnabled);
-    m_rulerController->updateGeometry(m_sliceGeometry, m_slider->value());
+    m_rulerController->updateGeometry(m_renderer, m_sliceGeometry, m_slider->value());
     updateSliceLabel(m_slider->value());
 
     if (!m_vtkWidget->isVisible() || m_vtkWidget->width() <= 0 || m_vtkWidget->height() <= 0) {

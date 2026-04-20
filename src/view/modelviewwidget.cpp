@@ -3,6 +3,7 @@
 #include "modelclippingcontroller.h"
 #include "modelviewcameracontroller.h"
 #include "modelviewcrosshaircontroller.h"
+#include "modelrulercontroller.h"
 
 #include <QEvent>
 #include <QFileInfo>
@@ -15,11 +16,16 @@
 
 #include <QVTKOpenGLNativeWidget.h>
 
+#include <algorithm>
+#include <array>
+
 #include <vtkActor.h>
 #include <vtkClipClosedSurface.h>
+#include <vtkCommand.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <vtkImageData.h>
 #include <vtkInteractorStyleTrackballCamera.h>
+#include <vtkOpenGLPolyDataMapper.h>
 #include <vtkPlane.h>
 #include <vtkPlaneCollection.h>
 #include <vtkPlanes.h>
@@ -28,6 +34,215 @@
 #include <vtkProperty.h>
 #include <vtkRenderer.h>
 #include <vtkRenderWindowInteractor.h>
+#include <vtkShader.h>
+#include <vtkShaderProgram.h>
+#include <vtkShaderProperty.h>
+
+namespace
+{
+constexpr float kRulerOccludedModelOpacity = 0.38f;
+constexpr int kMaxProjectedSegments = 128;
+constexpr int kMaxProjectedNodes = 128;
+constexpr int kMaxProjectedTextRects = 32;
+constexpr float kProjectedLineRadiusPixels = 4.5f;
+constexpr float kProjectedDepthEpsilon = 0.0005f;
+
+class ModelOcclusionShaderCallback final : public vtkCommand
+{
+public:
+    static ModelOcclusionShaderCallback *New()
+    {
+        return new ModelOcclusionShaderCallback();
+    }
+
+    ModelRulerController *RulerController = nullptr;
+    const bool *RulerEnabled = nullptr;
+
+    void Execute(vtkObject *, unsigned long, void *callData) override
+    {
+        auto *program = reinterpret_cast<vtkShaderProgram *>(callData);
+        if (program == nullptr) {
+            return;
+        }
+
+        program->SetUniformf("rulerOccludedAlpha", kRulerOccludedModelOpacity);
+        program->SetUniformf("rulerDepthEpsilon", kProjectedDepthEpsilon);
+        program->SetUniformf("rulerLineRadiusPixels", kProjectedLineRadiusPixels);
+
+        if (RulerController == nullptr || RulerEnabled == nullptr || !(*RulerEnabled)) {
+            program->SetUniformi("rulerSegmentCount", 0);
+            program->SetUniformi("rulerNodeCount", 0);
+            program->SetUniformi("rulerTextRectCount", 0);
+            return;
+        }
+
+        RulerController->refreshProjectedOverlays();
+
+        const auto &segments = RulerController->projectedSegments();
+        const auto &nodes = RulerController->projectedNodes();
+        const auto &textRects = RulerController->projectedTextRects();
+
+        const int segmentCount = std::min<int>(static_cast<int>(segments.size()), kMaxProjectedSegments);
+        const int nodeCount = std::min<int>(static_cast<int>(nodes.size()), kMaxProjectedNodes);
+        const int textRectCount = std::min<int>(static_cast<int>(textRects.size()), kMaxProjectedTextRects);
+
+        std::array<std::array<float, 4>, kMaxProjectedSegments> segmentData {};
+        std::array<std::array<float, 2>, kMaxProjectedSegments> segmentDepthData {};
+        std::array<std::array<float, 4>, kMaxProjectedNodes> nodeData {};
+        std::array<std::array<float, 4>, kMaxProjectedTextRects> textRectData {};
+        std::array<std::array<float, 2>, kMaxProjectedTextRects> textDepthData {};
+
+        for (int index = 0; index < segmentCount; ++index) {
+            const auto &segment = segments[static_cast<std::size_t>(index)];
+            segmentData[static_cast<std::size_t>(index)] = { segment.startDisplay[0],
+                                                             segment.startDisplay[1],
+                                                             segment.endDisplay[0],
+                                                             segment.endDisplay[1] };
+            segmentDepthData[static_cast<std::size_t>(index)] = { segment.startDepth, segment.endDepth };
+        }
+
+        for (int index = 0; index < nodeCount; ++index) {
+            const auto &node = nodes[static_cast<std::size_t>(index)];
+            nodeData[static_cast<std::size_t>(index)] = { node.centerDisplay[0],
+                                                          node.centerDisplay[1],
+                                                          node.depth,
+                                                          node.radiusPixels };
+        }
+
+        for (int index = 0; index < textRectCount; ++index) {
+            const auto &textRect = textRects[static_cast<std::size_t>(index)];
+            textRectData[static_cast<std::size_t>(index)] = { textRect.minDisplay[0],
+                                                              textRect.minDisplay[1],
+                                                              textRect.maxDisplay[0],
+                                                              textRect.maxDisplay[1] };
+            textDepthData[static_cast<std::size_t>(index)] = { textRect.depth, 0.0f };
+        }
+
+        program->SetUniformi("rulerSegmentCount", segmentCount);
+        program->SetUniformi("rulerNodeCount", nodeCount);
+        program->SetUniformi("rulerTextRectCount", textRectCount);
+        program->SetUniform4fv("rulerSegments",
+                               segmentCount,
+                               reinterpret_cast<const float (*)[4]>(segmentData.data()));
+        program->SetUniform2fv("rulerSegmentDepths",
+                               segmentCount,
+                               reinterpret_cast<const float (*)[2]>(segmentDepthData.data()));
+        program->SetUniform4fv("rulerNodes",
+                               nodeCount,
+                               reinterpret_cast<const float (*)[4]>(nodeData.data()));
+        program->SetUniform4fv("rulerTextRects",
+                               textRectCount,
+                               reinterpret_cast<const float (*)[4]>(textRectData.data()));
+        program->SetUniform2fv("rulerTextRectDepths",
+                               textRectCount,
+                               reinterpret_cast<const float (*)[2]>(textDepthData.data()));
+    }
+};
+
+void installLocalRulerOcclusionShader(vtkActor *actor,
+                                      vtkPolyDataMapper *mapper,
+                                      ModelRulerController *rulerController,
+                                      const bool *rulerEnabled)
+{
+    if (actor == nullptr || mapper == nullptr || rulerController == nullptr || rulerEnabled == nullptr) {
+        return;
+    }
+
+    auto *shaderProperty = actor->GetShaderProperty();
+    shaderProperty->AddFragmentShaderReplacement(
+        "//VTK::System::Dec",
+        false,
+        R"(
+//VTK::System::Dec
+uniform int rulerSegmentCount;
+uniform int rulerNodeCount;
+uniform int rulerTextRectCount;
+uniform vec4 rulerSegments[128];
+uniform vec2 rulerSegmentDepths[128];
+uniform vec4 rulerNodes[128];
+uniform vec4 rulerTextRects[32];
+uniform vec2 rulerTextRectDepths[32];
+uniform float rulerOccludedAlpha;
+uniform float rulerDepthEpsilon;
+uniform float rulerLineRadiusPixels;
+
+float rulerDistanceToSegment(vec2 p, vec2 a, vec2 b, out float tValue)
+{
+  vec2 ab = b - a;
+  float abLengthSquared = dot(ab, ab);
+  if (abLengthSquared <= 0.0001)
+  {
+    tValue = 0.0;
+    return length(p - a);
+  }
+  tValue = clamp(dot(p - a, ab) / abLengthSquared, 0.0, 1.0);
+  vec2 closest = a + tValue * ab;
+  return length(p - closest);
+}
+
+bool vtkIsLocallyOccludedByRuler(vec2 fragXY, float fragZ)
+{
+  for (int i = 0; i < rulerSegmentCount; ++i)
+  {
+    float tValue = 0.0;
+    float distanceToSegment = rulerDistanceToSegment(fragXY, rulerSegments[i].xy, rulerSegments[i].zw, tValue);
+    if (distanceToSegment <= rulerLineRadiusPixels)
+    {
+      float rulerDepth = mix(rulerSegmentDepths[i].x, rulerSegmentDepths[i].y, tValue);
+      if (fragZ < rulerDepth - rulerDepthEpsilon)
+      {
+        return true;
+      }
+    }
+  }
+
+  for (int i = 0; i < rulerNodeCount; ++i)
+  {
+    if (length(fragXY - rulerNodes[i].xy) <= rulerNodes[i].w
+        && fragZ < rulerNodes[i].z - rulerDepthEpsilon)
+    {
+      return true;
+    }
+  }
+
+  for (int i = 0; i < rulerTextRectCount; ++i)
+  {
+    if (fragXY.x >= rulerTextRects[i].x
+        && fragXY.x <= rulerTextRects[i].z
+        && fragXY.y >= rulerTextRects[i].y
+        && fragXY.y <= rulerTextRects[i].w
+        && fragZ < rulerTextRectDepths[i].x - rulerDepthEpsilon)
+    {
+      return true;
+    }
+  }
+
+  return false;
+}
+)",
+        false);
+
+    shaderProperty->AddFragmentShaderReplacement(
+        "//VTK::Light::Impl",
+        false,
+        R"(
+//VTK::Light::Impl
+if (vtkIsLocallyOccludedByRuler(gl_FragCoord.xy, gl_FragCoord.z))
+{
+  float targetOpacity = min(fragOutput0.a, rulerOccludedAlpha);
+  float alphaScale = targetOpacity / max(fragOutput0.a, 0.0001);
+  fragOutput0.rgb *= alphaScale;
+  fragOutput0.a = targetOpacity;
+}
+)",
+        false);
+
+    vtkNew<ModelOcclusionShaderCallback> shaderCallback;
+    shaderCallback->RulerController = rulerController;
+    shaderCallback->RulerEnabled = rulerEnabled;
+    mapper->AddObserver(vtkCommand::UpdateShaderEvent, shaderCallback);
+}
+}
 
 ModelViewWidget::ModelViewWidget(QWidget *parent)
     : QWidget(parent)
@@ -52,6 +267,8 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
     connect(m_maximizeButton, &QToolButton::clicked, this, &ModelViewWidget::maximizeToggled);
 
     auto renderWindow = vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
+    renderWindow->SetAlphaBitPlanes(1);
+    renderWindow->SetMultiSamples(0);
     m_vtkWidget->setRenderWindow(renderWindow);
     m_vtkWidget->interactor()->SetInteractorStyle(vtkSmartPointer<vtkInteractorStyleTrackballCamera>::New());
     m_vtkWidget->installEventFilter(this);
@@ -59,10 +276,15 @@ ModelViewWidget::ModelViewWidget(QWidget *parent)
     renderWindow->AddRenderer(m_renderer);
     // Use a low-saturation light background to improve contrast for pale anatomy meshes.
     m_renderer->SetBackground(0.93, 0.95, 0.98);
+    m_renderer->UseDepthPeelingOn();
+    m_renderer->SetMaximumNumberOfPeels(32);
+    m_renderer->SetOcclusionRatio(0.08);
 
     m_cameraController = std::make_unique<ModelViewCameraController>(this, m_renderer, m_vtkWidget->interactor());
     m_clippingController = std::make_unique<ModelClippingController>(m_vtkWidget, m_renderer);
     m_crosshairController = std::make_unique<ModelViewCrosshairController>(m_renderer);
+    m_rulerController = std::make_unique<ModelRulerController>(m_renderer);
+    m_renderer->AddActor(m_rulerController->actor());
     m_cameraController->setBoundsProvider([this](ModelViewCameraController::BoundsArray &bounds) {
         return m_crosshairController != nullptr && m_crosshairController->cameraBounds(bounds.data());
     });
@@ -107,6 +329,10 @@ void ModelViewWidget::clearScene(const QString &message)
     }
     m_models.clear();
     m_crosshairController->clearScene();
+    m_rulerController->clearScene();
+    m_renderer->AddActor(m_rulerController->actor());
+    m_rulerController->setVisible(m_rulerEnabled);
+    updateRulerOcclusionAppearance();
     m_statusLabel->setText(message);
     queueSceneUpdate(false);
 }
@@ -126,7 +352,8 @@ void ModelViewWidget::addModelData(const QString &filePath,
 
     auto actor = vtkSmartPointer<vtkActor>::New();
     actor->SetMapper(mapper);
-    actor->GetProperty()->SetOpacity(material.hasMaterial ? material.opacity : 1.0);
+    const double baseOpacity = material.hasMaterial ? material.opacity : 1.0;
+    actor->GetProperty()->SetOpacity(baseOpacity);
     if (material.hasMaterial) {
         actor->GetProperty()->SetColor(material.color[0], material.color[1], material.color[2]);
         actor->GetProperty()->SetSpecularColor(material.specularColor[0],
@@ -135,16 +362,20 @@ void ModelViewWidget::addModelData(const QString &filePath,
         actor->GetProperty()->SetSpecular(material.specularStrength);
         actor->GetProperty()->SetSpecularPower(material.specularPower);
     }
+    installLocalRulerOcclusionShader(actor, mapper, m_rulerController.get(), &m_rulerEnabled);
 
-    m_models.push_back(ModelEntry { actor, mapper, polyData });
+    m_models.push_back(ModelEntry { actor, mapper, polyData, baseOpacity });
     m_crosshairController->addModelActor(actor, polyData);
+    m_rulerController->addModelActor(actor);
     m_crosshairController->updateGeometry();
+    m_rulerController->updateGeometry();
     if (!m_sceneBatchActive) {
         m_statusLabel->setText(QStringLiteral("已加载模型: %1").arg(info.fileName()));
     }
     if (m_clippingEnabled) {
         updateClippedModels();
     }
+    updateRulerOcclusionAppearance();
     queueSceneUpdate(true);
 }
 
@@ -166,6 +397,16 @@ void ModelViewWidget::setCrosshairEnabled(bool enabled)
 {
     m_crosshairController->setEnabled(enabled);
     m_crosshairController->updateGeometry();
+    queueSceneUpdate(false);
+}
+
+void ModelViewWidget::setRulerEnabled(bool enabled)
+{
+    m_rulerEnabled = enabled;
+    m_rulerController->setEnabled(enabled);
+    m_rulerController->setVisible(enabled);
+    m_rulerController->updateGeometry();
+    updateRulerOcclusionAppearance();
     queueSceneUpdate(false);
 }
 
@@ -246,8 +487,32 @@ bool ModelViewWidget::eventFilter(QObject *watched, QEvent *event)
             return QWidget::eventFilter(watched, event);
         }
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (m_rulerEnabled
+            && mouseEvent->button() == Qt::RightButton
+            && mouseEvent->modifiers() == Qt::NoModifier
+            && m_rulerController->isMeasuring()) {
+            m_rulerController->finishMeasurement();
+            m_rulerController->updateGeometry();
+            m_vtkWidget->renderWindow()->Render();
+            return true;
+        }
+
         if (mouseEvent->button() != Qt::LeftButton) {
             break;
+        }
+
+        if (m_rulerEnabled && mouseEvent->modifiers() == Qt::NoModifier) {
+            if (m_rulerController->beginNodeDrag(m_vtkWidget, mouseEvent->pos())) {
+                m_rulerController->updateGeometry();
+                m_vtkWidget->renderWindow()->Render();
+                return true;
+            }
+
+            if (m_rulerController->recordPoint(m_vtkWidget, mouseEvent->pos())) {
+                m_rulerController->updateGeometry();
+                m_vtkWidget->renderWindow()->Render();
+                return true;
+            }
         }
 
         ModelViewCrosshairController::Axis worldPosition;
@@ -266,6 +531,19 @@ bool ModelViewWidget::eventFilter(QObject *watched, QEvent *event)
             return QWidget::eventFilter(watched, event);
         }
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (m_rulerEnabled && mouseEvent->modifiers() == Qt::NoModifier) {
+            if (m_rulerController->updateNodeDrag(m_vtkWidget, mouseEvent->pos())) {
+                m_rulerController->updateGeometry();
+                m_vtkWidget->renderWindow()->Render();
+                return true;
+            }
+
+            if (m_rulerController->updateHoverPoint(m_vtkWidget, mouseEvent->pos())) {
+                m_rulerController->updateGeometry();
+                m_vtkWidget->renderWindow()->Render();
+                return true;
+            }
+        }
         ModelViewCrosshairController::Axis worldPosition;
         if (!m_crosshairController->updateInteraction(m_vtkWidget,
                                                       (mouseEvent->buttons() & Qt::LeftButton) != 0,
@@ -285,6 +563,11 @@ bool ModelViewWidget::eventFilter(QObject *watched, QEvent *event)
             return QWidget::eventFilter(watched, event);
         }
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::LeftButton && m_rulerController->endNodeDrag()) {
+            m_rulerController->updateGeometry();
+            m_vtkWidget->renderWindow()->Render();
+            return true;
+        }
         if (m_crosshairController->endInteraction(mouseEvent->button() == Qt::LeftButton)) {
             return true;
         }
@@ -352,6 +635,24 @@ void ModelViewWidget::flushQueuedSceneUpdate()
 
     m_sceneNeedsRender = false;
     m_sceneNeedsCameraReset = false;
+}
+
+void ModelViewWidget::updateRulerOcclusionAppearance()
+{
+    for (ModelEntry &entry : m_models) {
+        if (entry.actor == nullptr) {
+            continue;
+        }
+
+        entry.actor->GetProperty()->SetOpacity(entry.baseOpacity);
+        if (m_rulerEnabled || entry.baseOpacity < 0.999) {
+            entry.actor->ForceOpaqueOff();
+            entry.actor->ForceTranslucentOn();
+        } else {
+            entry.actor->ForceTranslucentOff();
+            entry.actor->ForceOpaqueOff();
+        }
+    }
 }
 
 void ModelViewWidget::updateClippedModels()

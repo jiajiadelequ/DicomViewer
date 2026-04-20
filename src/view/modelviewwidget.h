@@ -19,6 +19,7 @@ class QToolButton;
 class ModelViewCameraController;
 class ModelClippingController;
 class ModelViewCrosshairController;
+class ModelRulerController;
 class vtkActor;
 class vtkImageData;
 class vtkPolyDataMapper;
@@ -40,6 +41,7 @@ public:
     void setModelVisibility(int index, bool visible);
     void setReferenceImageData(vtkImageData *imageData);
     void setCrosshairEnabled(bool enabled);
+    void setRulerEnabled(bool enabled);
     void setClippingEnabled(bool enabled);
     void setCursorWorldPosition(double x, double y, double z);
     [[nodiscard]] std::array<double, 3> cursorWorldPosition() const;
@@ -58,8 +60,10 @@ private:
         vtkSmartPointer<vtkActor> actor;
         vtkSmartPointer<vtkPolyDataMapper> mapper;
         vtkSmartPointer<vtkPolyData> originalPolyData;
+        double baseOpacity = 1.0;
     };
 
+    void updateRulerOcclusionAppearance();
     void updateClippedModels();
 
     void setCursorWorldPositionInternal(const std::array<double, 3> &worldPosition, bool emitSignal);
@@ -72,8 +76,10 @@ private:
     std::unique_ptr<ModelViewCameraController> m_cameraController;
     std::unique_ptr<ModelClippingController> m_clippingController;
     std::unique_ptr<ModelViewCrosshairController> m_crosshairController;
+    std::unique_ptr<ModelRulerController> m_rulerController;
     vtkSmartPointer<vtkRenderer> m_renderer;
     std::vector<ModelEntry> m_models;
+    bool m_rulerEnabled = false;
     bool m_clippingEnabled = false;
     bool m_sceneBatchActive = false;
     bool m_sceneNeedsRender = false;

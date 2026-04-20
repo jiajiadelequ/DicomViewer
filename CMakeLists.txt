@@ -154,6 +154,8 @@ set(PROJECT_SOURCES
     src/view/modelclippingcontroller.cpp
     src/view/modelviewcrosshaircontroller.h
     src/view/modelviewcrosshaircontroller.cpp
+    src/view/modelrulercontroller.h
+    src/view/modelrulercontroller.cpp
     src/view/fourpanecontentwidget.h
     src/view/fourpanecontentwidget.cpp
     src/view/viewerstatewidget.h
